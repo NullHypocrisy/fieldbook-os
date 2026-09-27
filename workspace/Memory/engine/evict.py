@@ -12,16 +12,8 @@ import os
 import sys
 from datetime import date
 
-
-def workspace_root(start):
-    p = os.path.abspath(start)
-    while True:
-        if os.path.exists(os.path.join(p, "workspace.json")):
-            return p
-        parent = os.path.dirname(p)
-        if parent == p:
-            sys.exit("workspace.json not found above " + start)
-        p = parent
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")))
+from workspace_common import workspace_root  # noqa: E402
 
 
 ROOT = workspace_root(os.path.dirname(os.path.abspath(__file__)))

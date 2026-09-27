@@ -15,16 +15,8 @@ import sys
 import tempfile
 from datetime import date
 
-
-def workspace_root(start):
-    p = os.path.abspath(start)
-    while True:
-        if os.path.exists(os.path.join(p, "workspace.json")):
-            return p
-        parent = os.path.dirname(p)
-        if parent == p:
-            sys.exit("workspace.json not found above " + start)
-        p = parent
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
+from workspace_common import workspace_root  # noqa: E402
 
 
 SRC = workspace_root(os.path.dirname(os.path.abspath(__file__)))
@@ -80,6 +72,7 @@ def main():
     spec = os.path.join(ws, "Work Items", "WI-01_example-item.md")
     with open(spec, "a", encoding="utf-8") as f:
         f.write("\noutcome: smoke test completion\n")
+    os.makedirs(os.path.join(ws, "Work Items", "completed"), exist_ok=True)
     shutil.move(spec, os.path.join(ws, "Work Items", "completed",
                                    "WI-01_example-item.md"))
     rc, out = run(ws, os.path.join("Work Items", "tools",

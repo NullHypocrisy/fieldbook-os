@@ -30,16 +30,8 @@ import sys
 import traceback
 from datetime import date, datetime, timedelta
 
-
-def workspace_root(start):
-    p = os.path.abspath(start)
-    while True:
-        if os.path.exists(os.path.join(p, "workspace.json")):
-            return p
-        parent = os.path.dirname(p)
-        if parent == p:
-            sys.exit("workspace.json not found above " + start)
-        p = parent
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
+from workspace_common import log_line, workspace_root  # noqa: E402
 
 
 ROOT = workspace_root(os.path.dirname(os.path.abspath(__file__)))
@@ -55,13 +47,6 @@ LOAD_BEARING_EXTS = {".py", ".ps1", ".sh", ".bat", ".cmd",
 SEARCH_MD_DIRS = ("Skills", "Work Items")   # open specs + skills only
 EXCLUDED_DIR_NAMES = {"Quarantine", "__pycache__", ".git", "node_modules",
                       "completed", "logs", "closed", "managed"}
-
-
-def log_line(msg):
-    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    with open(LOG, "a", encoding="utf-8") as f:
-        f.write("%s | %s\n" % (stamp, msg))
-    print(msg)
 
 
 def read_manifest(folder):
@@ -141,7 +126,7 @@ def main():
         require_backup = bool(cfg.get("require_backup", True))
 
         if require_backup and not backup_landed(cfg):
-            log_line("HELD-ALL | no backup landed this week "
+            log_line(LOG, "HELD-ALL | no backup landed this week "
                      "(require_backup is true); nothing deleted")
             return
 
@@ -172,12 +157,12 @@ def main():
                         safe_delete(path, args.dry_run)
                         deleted.append(f)
         verb = "WOULD-DELETE" if args.dry_run else "DELETED"
-        log_line("%s %d (%s) | held %d (%s)"
+        log_line(LOG, "%s %d (%s) | held %d (%s)"
                  % (verb, len(deleted), ",".join(deleted[:20]) or "-",
                     len(held),
                     ",".join("%s:%s" % h for h in held[:20]) or "-"))
     except Exception:
-        log_line("CRASH | %s"
+        log_line(LOG, "CRASH | %s"
                  % traceback.format_exc().strip().splitlines()[-1])
         raise
 

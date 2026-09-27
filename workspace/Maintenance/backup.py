@@ -22,29 +22,14 @@ import time
 import traceback
 from datetime import datetime
 
-
-def workspace_root(start):
-    p = os.path.abspath(start)
-    while True:
-        if os.path.exists(os.path.join(p, "workspace.json")):
-            return p
-        parent = os.path.dirname(p)
-        if parent == p:
-            sys.exit("workspace.json not found above " + start)
-        p = parent
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
+from workspace_common import log_line, workspace_root  # noqa: E402
 
 
 ROOT = workspace_root(os.path.dirname(os.path.abspath(__file__)))
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOG = os.path.join(HERE, "backup_log.txt")
 DATED = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-
-def log_line(msg):
-    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    with open(LOG, "a", encoding="utf-8") as f:
-        f.write("%s | %s\n" % (stamp, msg))
-    print(msg)
 
 
 def copy_db(src, dst):
@@ -91,7 +76,7 @@ def snapshot(dest_root, excluded):
                 try:
                     shutil.copy2(src, dst)
                 except OSError as e:
-                    log_line("WARN could not copy %s (%s)" % (src, e))
+                    log_line(LOG, "WARN could not copy %s (%s)" % (src, e))
                     continue
             n += 1
     # Antivirus or the search indexer can hold a brand-new folder open for
@@ -131,7 +116,7 @@ def main():
         dest = cfg.get(args.tier + "_dest")
         keep = int(cfg.get(args.tier + "_keep", 7))
         if not dest:
-            log_line("%s | NO-DEST | no %s_dest configured in workspace.json"
+            log_line(LOG, "%s | NO-DEST | no %s_dest configured in workspace.json"
                      % (args.tier, args.tier))
             return
         dest = dest if os.path.isabs(dest) else os.path.join(ROOT, dest)
@@ -140,7 +125,7 @@ def main():
         except ValueError:      # different drives - certainly outside
             inside = False
         if inside:
-            log_line("%s | REFUSED | destination is inside the workspace; "
+            log_line(LOG, "%s | REFUSED | destination is inside the workspace; "
                      "a backup that backs itself up grows without bound"
                      % args.tier)
             return
@@ -148,17 +133,17 @@ def main():
         if args.tier == "daily":
             excluded |= set(cfg.get("daily_exclude_dirs", []))
         if args.dry_run:
-            log_line("%s | DRY-RUN | would snapshot to %s, keep %d"
+            log_line(LOG, "%s | DRY-RUN | would snapshot to %s, keep %d"
                      % (args.tier, dest, keep))
             return
         os.makedirs(dest, exist_ok=True)
         target, n, status = snapshot(dest, excluded)
         removed = prune(dest, keep)
-        log_line("%s | %s | %s, %d files, pruned %s"
+        log_line(LOG, "%s | %s | %s, %d files, pruned %s"
                  % (args.tier, status.upper(), target, n,
                     ",".join(removed) or "none"))
     except Exception:
-        log_line("%s | CRASH | %s"
+        log_line(LOG, "%s | CRASH | %s"
                  % (args.tier, traceback.format_exc().strip().splitlines()[-1]))
         raise
 
