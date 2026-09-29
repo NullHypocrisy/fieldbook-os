@@ -4,6 +4,9 @@ __pycache__/
 workspace/Memory/index/
 workspace/Maintenance/backup_log.txt
 workspace/Maintenance/cleanup_log.txt
+workspace/Scheduled/runs.log
 # Secrets never enter a repository
 .env
 *.env
+workspace/dashboard.html
+workspace/attention.json

@@ -1,0 +1,10 @@
+# Derived and runtime files - never commit these
+__pycache__/
+*.pyc
+Memory/index/
+Maintenance/*_log.txt
+Scheduled/runs.log
+# Secrets never enter a repository
+.env
+*.env
+dashboard.html

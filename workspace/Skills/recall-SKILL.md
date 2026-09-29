@@ -1,10 +1,11 @@
 ---
 name: recall
-description: >
-  Search memory for past decisions, facts, or history. Use when the user
-  asks "what did we decide about...", "when did we...", "do you
-  remember...", or when a session needs history that is not in the files it
-  read at start.
+description: Search memory for past decisions, facts or history, when the user asks about the past or a session needs history the files it read at start do not hold.
+triggers:
+  - "what did we decide about"
+  - "when did we"
+  - "do you remember"
+  - "search memory"
 ---
 
 # Recall Skill

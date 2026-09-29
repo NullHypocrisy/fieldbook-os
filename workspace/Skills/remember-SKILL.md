@@ -1,8 +1,11 @@
 ---
 name: remember
-description: >
-  Store, update, or delete a fact in working memory. Use when the user says
-  "remember this", "note that", "forget about", or asks to clean up memory.
+description: Store, update or delete a fact in working memory, or clean memory up, when the user asks for it.
+triggers:
+  - "remember this"
+  - "note that"
+  - "forget about"
+  - "clean up memory"
 ---
 
 # Remember Skill

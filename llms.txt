@@ -1,0 +1,10 @@
+# Fieldbook OS
+
+> An agentic OS you set up with one prompt: memory, work items, projects, messaging, backups, scheduled jobs and a dashboard for any file-capable AI assistant. Plain files and standard-library Python.
+
+To install for a user, read INSTALL.md and follow it from the top.
+
+- [INSTALL.md](INSTALL.md): the installing AI's instructions, interview included
+- [README.md](README.md): what it is, supported platforms, security note
+- [workspace/AGENTS.md](workspace/AGENTS.md): the rules every session in an installed workspace reads
+- [workspace/Skills/00_triggers.md](workspace/Skills/00_triggers.md): named jobs and the procedure for each

@@ -1,99 +1,85 @@
-# Portable Systems — a working memory, work-tracking, messaging and hygiene layer for AI-assisted workspaces
+# Fieldbook OS
 
-Four systems that make an AI assistant's workspace durable across sessions,
-providers, and machines. They were built for daily use in one person's
-workspace and rebuilt here as a general, installable set. Nothing in this
-folder is a copy of that workspace — every file here is a fresh, portable
-version of the mechanics.
+**An agentic OS you set up with one prompt.**
 
-The four systems:
-
-1. **Memory** — what the assistant knows between sessions: a small
-   always-loaded "working memory" per topic, append-only day logs, and a
-   full-text search index so anything ever written down can be found again
-   with a citation.
-2. **Work Items** — durable task tracking: one spec document per piece of
-   work, a one-line-per-item index, and a generated archive of everything
-   completed.
-3. **Agent Bridge** — file-based messaging between otherwise walled-off
-   projects or agents, with inboxes, statuses, and an archive convention.
-4. **Quarantine & Backup** — nothing is hard-deleted: retired files cool off
-   in a quarantine folder with a manifest and an expiry, a weekly cleanup
-   deletes only what is expired, unreferenced, and already backed up, and a
-   backup script snapshots the whole workspace to dated folders.
-
-## Requirements
-
-- Python 3.10 or newer, on any OS. Every script is standard library only.
-  (Search uses SQLite FTS5, which ships in the standard `sqlite3` builds on
-  Windows, macOS, and nearly all Linux distributions.)
-- Any AI assistant that can read files in a folder and run shell commands —
-  Claude, a local model behind an agent framework, or anything comparable.
-  Nothing here calls a model API; the assistant is the operator, the scripts
-  are the machinery.
+Fieldbook OS turns an AI assistant into one that remembers, keeps track of
+work, and looks after itself between conversations. It is a folder of plain
+files and small Python scripts that any file-capable AI can run: memory that
+lasts across sessions, work tracked from idea to done, messages between
+projects, backups and cleanup, scheduled jobs, and a dashboard that shows
+all of it at a glance. Nothing here calls a model or needs a subscription;
+your AI is the operator and the scripts are the machinery.
 
 ## Install
 
-1. Copy the `workspace/` folder to wherever your assistant works — e.g.
-   `~/agent-workspace` or `D:\Workspace`. The folder is the installation;
-   there is no installer.
-2. Open `workspace.json` and fill in what you want to differ from the
-   defaults (backup destinations are the only settings the scripts cannot
-   guess).
-3. Point your assistant at `AGENTS.md` in the workspace root as the file it
-   reads at the start of every session. For Claude-based tools, copy or
-   rename it to `CLAUDE.md`; for other tools, use whatever "read this first"
-   mechanism they honor (system prompt include, rules file, etc.).
-4. Run the smoke test: `python "Maintenance/smoke_test.py"` from the
-   workspace root. It exercises the indexer, search, the work-item index
-   builder, cleanup (dry run), and backup (dry run), and prints PASS/FAIL
-   per system.
+Open the AI tool you want to use, one that can read and write files on
+your computer, and paste this:
 
-Everything works from that point: sessions read `AGENTS.md`, write memory and
-day logs, track work items, and the maintenance scripts run whenever you (or
-your task scheduler) invoke them.
+> Install Fieldbook OS for me. Get it from
+> https://github.com/NullHypocrisy/fieldbook-os (clone it, or use the copy
+> I have at: _path, if you have one_), then read INSTALL.md in it and follow
+> it from the top. Ask me what you need to know as you go.
 
-## Scheduling (optional but recommended)
+The AI checks what your computer needs, walks you through a short
+interview (where things go, how you like to work, backups, which projects
+to start with), runs the installer, proves the result, and offers a guided
+tour. Nothing is installed without telling you exactly what first.
 
-The maintenance scripts are designed to be run on a schedule, but nothing
-breaks if they are not — they can also be run by hand or by the assistant.
+**Supported:** Windows, Python 3.10 or newer, git. The AI helps you get
+Python and git if you don't have them. macOS and Linux work best-effort:
+same steps, with the AI doing by hand whatever the scripts don't cover yet.
 
-- `Maintenance/backup.py --tier daily` — every morning.
-- `Maintenance/backup.py --tier weekly` — Sunday morning, before cleanup.
-- `Maintenance/cleanup.py` — Sunday evening, after the weekly backup.
-- `Memory/engine/indexer.py` — nightly, so each day's writing is searchable
-  by morning.
+**No file access in your tool?** A chat-only AI can't install this, but it
+can still take the rules that don't need files: ask it to fill in
+`tiers/account.md` for you to paste into its custom instructions.
 
-Use Task Scheduler on Windows, cron/launchd elsewhere.
+## What you get
+
+- **Rules in three layers.** Account-level rules that hold in every chat
+  (`tiers/`), workspace rules for any session that can read the folder
+  (`workspace/AGENTS.md`), and a rules file per project. Each rule lives in
+  exactly one layer.
+- **Memory.** A small always-read note per project, day logs as the
+  archive, and full-text search over everything ever written.
+- **Work items.** One spec per piece of work, an index, a generated
+  archive, and a launcher that can run marked items unattended.
+- **Projects.** Each with its own rules, memory, inbox and dashboard tab,
+  designed with you when you create it.
+- **Agent Bridge.** File-based messages between projects or agents.
+- **Backups, quarantine and cleanup.** Nothing is hard-deleted; backups
+  are tested by a restore drill.
+- **Scheduled jobs.** Each checks first whether there is anything to do,
+  so an empty night costs nothing. See `workspace/Scheduled/README.md`.
+- **Dashboard and waiting-on-you queue.** One static page; anything that
+  needs you is marked and also queued.
+- **Doctor and upgrades.** `doctor.py` checks the installation any time;
+  `upgrade.py` brings a newer kit in without overwriting your changes.
+
+## Security: read this
+
+Everything is stored as plain, unencrypted files: memory, the search index,
+backups, and any `.env` file holding keys. Fieldbook OS does not encrypt.
+We strongly advise putting backups on an encrypted destination (an
+encrypted drive or an encrypted cloud folder) and keeping the workspace on
+an encrypted disk. Doing that is up to you.
 
 ## Layout
 
-    workspace/
-      AGENTS.md            <- the rules the assistant reads every session
-      workspace.json       <- the one config file (paths, caps, retention)
-      Memory/              <- working memory, day logs, search engine
-      Work Items/          <- specs, index, completed archive, index builder
-      Agent Bridge/        <- cross-project message folders
-      Quarantine/          <- cooling-off area for retired files + manifest
-      Temp/managed/        <- self-clearing scratch (expiry from birth)
-      Maintenance/         <- backup.py, cleanup.py, smoke_test.py
-      Skills/              <- procedure files the assistant follows on demand
+    INSTALL.md       the installing AI's instructions
+    install.py       builds a workspace from the interview's answers
+    upgrade.py       upgrades an existing workspace to this kit version
+    tiers/           account rules, default working style, project template
+    workspace/       everything the installer places, each system with its README
+    sanitize.py      checks a folder for secrets before anything is shared
 
-Each system's folder carries its own README with the full design. `AGENTS.md`
-carries only the rules that bind every session; it points at the READMEs
-rather than repeating them.
+## Problems and feedback
 
-## Sanitizing before you publish or share
+Ask your AI to "file a bug". It gathers the details, strips anything
+personal or secret, shows you the report, and files it on GitHub (or gives
+you a link to submit it yourself).
 
-`sanitize.py` (beside this README) scans a folder for things that must never
-leave a private workspace: API keys and tokens, webhook URLs, email
-addresses, password-like assignments, and any extra terms you list (names,
-account numbers, broker names) in a `sanitize_terms.txt` file. Run it over
-your copy of the set — or over anything else — before pushing to a
-repository:
+## Sharing your own copy
 
-    python sanitize.py <folder> [--terms sanitize_terms.txt]
-
-Exit code 0 means no findings; 1 means findings were printed, one per line
-with file and line number. It is re-runnable and should be run before every
-push, not once.
+Before pushing a copy anywhere, run `python sanitize.py <folder>
+[--terms your-terms.txt]`. Exit 0 means nothing found; exit 1 lists each
+finding with file and line.

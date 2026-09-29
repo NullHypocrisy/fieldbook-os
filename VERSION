@@ -1,0 +1,4 @@
+0.9.0
+# Fieldbook OS kit version. Only line 1 is read: major.minor.patch.
+# install.py copies this file to the workspace root as the installed
+# version; an upgrade compares the kit's line 1 against the workspace's.

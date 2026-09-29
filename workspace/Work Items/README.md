@@ -25,13 +25,23 @@ edited by single lines only — never rewritten wholesale.
   spec to `completed/`, delete its index line, and run
   `python tools/build_completed_index.py` to regenerate the archive view.
 
+## Scope changes
+
+When an item's scope changes mid-flight, the spec records it on the spot:
+one dated line under the section it changes,
+`Scope change YYYY-MM-DD: <what changed> - <why, and on whose decision>`,
+and the section itself is updated to match. A change absorbed silently
+leaves the spec describing work that no longer exists, and the next
+session builds the wrong thing.
+
 `completed/00_completed_index.md` is GENERATED from the specs — read it for
 history, never hand-edit it; edits there are lost on the next build.
 
 ## Rules that keep it working
 
 - Every spec carries a `project:` tag as its first line, naming the project
-  (or `global`) it belongs to.
+  (or `global`) it belongs to; a spec without one counts as global. The
+  board shows a project's items on its tab.
 - A spec states what only it knows and points at whatever file owns the
   rest. It never restates another document.
 - Acceptance criteria are checkable by the build itself. Where one depends

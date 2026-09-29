@@ -1,10 +1,12 @@
 ---
 name: work-item
-description: >
-  Create or complete a work item in the Work Items system. Use when work is
-  identified that will not finish in the current session, and when closing
-  one out. The system itself is described in Work Items/README.md; this file
-  is the procedure for operating it at full depth.
+description: Create a work item for work that will not finish this session, or complete one; the system itself is described in Work Items/README.md.
+triggers:
+  - "add a work item"
+  - "new work item"
+  - "spec this up"
+  - "complete WI-NN"
+  - "close out this work item"
 ---
 
 # Work Item Skill
