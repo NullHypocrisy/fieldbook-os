@@ -33,21 +33,38 @@ Establish first, mostly by looking rather than asking:
   installer decides what fits there and puts the rest in the workspace
   rules file.
 - **File access.** You need to read and write files on the user's machine
-  and run commands. If you can, test it now: write a small file into the
-  folder where this kit sits, then read it back through a command (`dir`
-  or `ls`). Some AI tools write into a sandbox that is not the user's
-  disk; if the file is not really there, you are in one, and nothing below
-  will work. Delete the test file.
+  and run commands. Some AI tools run commands in a sandbox of their own:
+  a separate computer where writing and reading back works but none of it
+  is the user's disk. Browser and phone chats usually work this way. So
+  prove it is their machine, not just a machine: list their home folder
+  (on Windows, `C:\Users\<name>`) or their Desktop and ask them to confirm
+  a file or two they recognise. A Linux-style path such as `/home/...` or
+  `/mnt/...` when they are on Windows means a sandbox. If it is theirs,
+  also write a small file into the folder where this kit sits, read it
+  back with a command (`dir` or `ls`), and delete it.
 
-If you cannot reach the disk, fixing that comes before any interview: tell
-the user plainly and walk them through the options, then stop:
-  - Desktop AI apps can be given file access with a filesystem connector
-    (for Claude Desktop, a filesystem or Desktop Commander MCP server).
-  - Coding agents that run in a terminal or an editor already have it
-    (Claude Code, Codex CLI, Cursor, VS Code agent mode, and similar).
-  - A chat-only web tool cannot install. It can still take the account
-    rules: offer to fill in `tiers/account.md` with their time zone for them
-    to paste into their tool's custom instructions.
+If you cannot reach the disk, fixing that comes before any interview. Say
+so plainly: from where you are running, you cannot reach their files. Then
+set them up with a tool that can, one step per message, waiting for their
+"done" (or a screenshot) before the next:
+  1. Recommend one. If they are in a Claude chat (browser or phone), that
+     is Claude Desktop with the Desktop Commander connector. Otherwise it
+     is their AI's desktop app with a file-access connector, or a coding
+     agent that already has access (Claude Code, Codex CLI, Cursor, VS Code
+     agent mode, and similar). Ask only if they have a preference.
+  2. Look up that tool's current install and connector steps yourself, on
+     its own site or documentation. They change often, so never give them
+     from memory.
+  3. Walk them through it: download and install, sign in, add the
+     connector, restart if the steps say to. When a step needs something
+     else on their machine (some connectors need Node.js), say in one
+     sentence what it is for and give the exact link or command.
+  4. Hand them the prompt to paste into the new tool, in a code block: the
+     one from README.md, which starts this file over from the top there.
+  5. Stop. Everything else happens in the new tool.
+If they would rather not install anything, a chat-only tool can still take
+the account rules: offer to fill in `tiers/account.md` with their time zone
+for them to paste into their tool's custom instructions.
 
 ## 2. Prerequisites
 

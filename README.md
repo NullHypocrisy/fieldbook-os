@@ -12,8 +12,7 @@ your AI is the operator and the scripts are the machinery.
 
 ## Install
 
-Open the AI tool you want to use, one that can read and write files on
-your computer, and paste this:
+Open your AI, even a chat in your browser, and paste this:
 
 > Install Fieldbook OS for me. Get it from
 > https://github.com/NullHypocrisy/fieldbook-os (clone it, or use the copy
@@ -29,8 +28,10 @@ tour. Nothing is installed without telling you exactly what first.
 Python and git if you don't have them. macOS and Linux work best-effort:
 same steps, with the AI doing by hand whatever the scripts don't cover yet.
 
-**No file access in your tool?** A chat-only AI can't install this, but it
-can still take the rules that don't need files: ask it to fill in
+**Your AI can't reach your files?** A browser or phone chat usually
+can't. It will notice, walk you through setting up one that can (for
+Claude, the desktop app with a file connector), and hand you the prompt
+to paste there. If you'd rather install nothing, it can still fill in
 `tiers/account.md` for you to paste into its custom instructions.
 
 ## What you get
