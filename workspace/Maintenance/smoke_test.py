@@ -116,12 +116,18 @@ TILES = (("g-waiting", "Waiting on you"), ("g-work", "Work"),
          ("g-memory", "Memory"), ("g-scheduled", "Scheduled pieces"),
          ("g-backups", "Backups and cleanup"),
          ("g-housekeeping", "Housekeeping"), ("g-bridge", "Bridge"))
-DESIGN_CLASSES = ('class="wordmark"', 'class="chips"', 'class="stamp"',
+# The ribbon's labelled tiles, left to right; the Work tile ends the ribbon
+# with its own headline pair instead of a label. Every section has a card.
+RIBBON_LABELS = ["Waiting on you", "Scheduled pieces", "Backups and cleanup",
+                 "Memory"]
+DESIGN_CLASSES = ('class="brand"', 'class="chips"', 'class="stamp"',
                   'class="nav"', 'id="nav-home"', 'class="ribbon"',
-                  'class="rt ', 'class="cols"', 'class="lnk"',
+                  'class="rt ', 'class="heads"', 'class="wrow ',
+                  'class="cols"', 'class="lnk"', 'class="stack"',
+                  'class="legend"', 'class="gbars"', 'class="tcell ',
                   'class="crumb"', 'class="card"', 'class="row"',
                   'class="mem"', 'class="bar"', 'class="note"',
-                  'class="dot ', "<footer>", "prefers-color-scheme")
+                  'class="dot ', "<footer>")
 
 
 def board(ws, label):
@@ -134,12 +140,17 @@ def board(ws, label):
     page = open(page_path, encoding="utf-8").read() \
         if os.path.exists(page_path) else ""
     ribbon = page.split('class="ribbon"', 1)[-1].split('class="cols"')[0]
+    missing = [c for c in DESIGN_CLASSES if c not in page]
     check("board %s: Global tiles in order, each with its page" % label,
-          all(c in page for c in DESIGN_CLASSES)
+          not missing
           and re.findall(r'<div class="lab">([^<]*)<', ribbon)
-          == [t for _, t in TILES]
+          == RIBBON_LABELS
+          and ribbon.rfind('class="heads"') > ribbon.rfind('class="lab"')
           and all('id="page-%s"' % p in page and page.count('href="#%s"' % p)
-                  >= 2 for p, _ in TILES), out)
+                  >= 1 for p, _ in TILES)
+          and all(page.count('href="#%s"' % p) >= 2 for p, _ in TILES
+                  if p not in ("g-housekeeping", "g-bridge")),
+          missing or out)
     pdir = os.path.join(ws, "Projects")
     projects = sorted(d for d in os.listdir(pdir) if os.path.isdir(
         os.path.join(pdir, d))) if os.path.isdir(pdir) else []
@@ -820,6 +831,29 @@ def main():
         "Plain later item.")), page[-4000:])
     check("board populated: urgent renders first",
           0 < page.find("Urgent item.") < page.find("Plain later item."))
+    check("board populated: work states from Run, Status and Depends on",
+          all(s in page for s in (
+              'wrow ok">Ready for launcher<b>0</b>',
+              'wrow bad">Blocked<b>0</b>',
+              'wrow warn">Needs decisions<b>1</b>',
+              'wrow acc">Attended session<b>0</b>',
+              'wrow hold">On hold<b>0</b>'))
+          and "Handed back" not in page, page[:3000])
+    cfg = json.load(open(cfgp, encoding="utf-8"))
+    looks = {}
+    for look in ("dark", "colorful-light", "no-such-look"):
+        cfg.setdefault("board", {})["theme"] = look
+        json.dump(cfg, open(cfgp, "w", encoding="utf-8"), indent=2)
+        looks[look] = board(ws, "look " + look)[0]
+    cfg["board"]["theme"] = "auto"
+    json.dump(cfg, open(cfgp, "w", encoding="utf-8"), indent=2)
+    check("board: the look follows workspace.json, unknown falls back",
+          "/* dark:" in looks["dark"] and "/* auto:" not in looks["dark"]
+          and "/* auto:" in looks["no-such-look"]
+          and "/* colorful light:" in looks["colorful-light"]
+          and 'class="card c-work"' in looks["colorful-light"]
+          and 'chip warn">Look <b>no-such-look</b> unknown'
+          in looks["no-such-look"])
     check("board populated: never-run drill neutral, not filed",
           re.search(r'class="dot idle"></span>Last restore drill: not run '
                     r'yet', page)

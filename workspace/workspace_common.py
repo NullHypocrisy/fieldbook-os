@@ -46,6 +46,11 @@ PROJECT_NAME = r"^[A-Za-z0-9][A-Za-z0-9_-]*$"
 PROJECT_TEMPLATE = "Setup/project-template.md"
 STARTER_PANELS = ("work", "memory", "inbox", "attention")
 
+# Board looks, chosen at install (workspace.json "board" -> "theme"); the
+# first is the default. Maintenance/dashboard_build.py owns what each is.
+BOARD_THEMES = ("auto", "dark", "light", "colorful-auto",
+                "colorful-dark", "colorful-light")
+
 
 def project_tenant(name):
     """The tenants.json entry for a project's memory tenant."""

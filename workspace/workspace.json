@@ -15,5 +15,9 @@
     "require_backup": true,
     "_comment": "require_backup: refuse to delete in a week whose weekly backup has not landed. Set false only if you run no backups at all."
   },
+  "board": {
+    "_comment": "theme: the dashboard's look - 'auto' (light, or dark when the computer is set to dark), 'dark' (always dark) or 'light' (always light); 'colorful-auto', 'colorful-dark' and 'colorful-light' are the same three in a tinted, more playful palette. Change it any time; the next build uses it.",
+    "theme": "auto"
+  },
   "sanitize_terms_file": null
 }

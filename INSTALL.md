@@ -86,17 +86,20 @@ and its slot are already settled from your first step. Ask, in this order:
 
 1. **Purpose.** "Is there something you already know you want to work on
    with this?" Names only, short. None is fine; the tour can create one.
-2. **Working style.** Open `tiers/working-style.md`. For each item, read
+2. **About them.** "What should I know about you? Your name, what you
+   do, and anything I should always keep in mind." A few lines is plenty;
+   skipping is fine. Record it, in their words, as `about_user`.
+3. **Working style.** Open `tiers/working-style.md`. For each item, read
    the placed text in plain words, then ask its "Ask:" question. Record
    keep, drop, or their replacement text. On the Decisions item, also ask
    which decisions they want the system to simply make for them; the usual
    good answer is "anything that ends up with the same result either way".
-3. **Where the workspace goes.** Suggest a folder in their home directory,
+4. **Where the workspace goes.** Suggest a folder in their home directory,
    for example `Documents/Fieldbook`. It must be empty or new.
-4. **Time zone.** Read it from the machine (`tzutil /g` on Windows, `date`
+5. **Time zone.** Read it from the machine (`tzutil /g` on Windows, `date`
    elsewhere) and confirm it with them as a named zone; ask only if the
    machine gave no answer.
-5. **Backups.** Two destinations, both outside the workspace: daily and
+6. **Backups.** Two destinations, both outside the workspace: daily and
    weekly (another drive, a synced cloud folder, a network share). Pin
    each to a concrete path. If one is removable (a thumb drive), say
    plainly that a backup is skipped when it is absent and the doctor
@@ -106,11 +109,11 @@ and its slot are already settled from your first step. Ask, in this order:
    advise an encrypted destination (an encrypted drive such as BitLocker,
    or an encrypted cloud folder); setting that up is theirs to do. Record
    what they choose, or no backups.
-6. **Keys and cost.** "Do you use any services this setup will need keys
+7. **Keys and cost.** "Do you use any services this setup will need keys
    for?" For each: the key's name only, the name it will carry in `.env`,
    and whether the service costs money and how much. Also ask about any
    paid service with no key. Never ask for a value.
-7. **Scheduler.** The workspace has small scheduled jobs (backups, a memory
+8. **Scheduler.** The workspace has small scheduled jobs (backups, a memory
    check, cleanup, the work-item launcher, the inbox reader); `Scheduled/README.md`
    describes each. Before asking, look yourself for a way to start a
    file-capable AI session from a command line with a prompt file (an
@@ -119,7 +122,15 @@ and its slot are already settled from your first step. Ask, in this order:
    recommend this when you found a launch route, naming it; or (b) no
    scheduler, they run the jobs by hand — recommend this when you found
    none. Either can be switched later.
-8. **Last question:** "Would you like a guided tour of your new Fieldbook OS
+9. **Dashboard look.** "The dashboard is one page that shows how everything
+   is running. Should it be light or dark?" (a) Match my computer: light,
+   or dark whenever the computer is set to dark mode (default) (b) Always
+   dark (c) Always light. Then: "Plain, or colorful?" (a) Plain: calm,
+   neutral colours (default) (b) Colorful: a tinted background and a
+   colour for each section. Add that they will see it at the end of the
+   install and can switch any time by asking. Record it as `board_theme`:
+   `auto`, `dark` or `light`, with `colorful-` in front for colorful.
+10. **Last question:** "Would you like a guided tour of your new Fieldbook OS
    once it's installed?" (a) Yes (b) Not now, I can ask for it later.
 
 Read the answers back as a short list and get a yes before writing them.

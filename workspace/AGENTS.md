@@ -22,7 +22,15 @@ search (`Memory/engine/search.py`) when history is needed.
 
 ## Session close
 
-When the user ends the session, write the close artifacts in this order:
+When the user ends the session, first settle the waiting-on-you queue
+(`python Maintenance/attention.py --list`). For each entry you can confirm
+on your own, such as a file now present, a setting now changed, or a task's
+latest line in `Scheduled/runs.log`, check it: if it is done, clear it with
+`--clear` and its id, note that in the day log, and tell the user what you
+cleared. Bring up only the entries still waiting on them, stated as the
+action they need.
+
+Then write the close artifacts in this order:
 1. One day-log entry per project the session touched:
    `Memory/<project>/logs/YYYY-MM-DD.md` (or `Memory/global/logs/` for work
    belonging to no project). Fold your own corrections in before writing

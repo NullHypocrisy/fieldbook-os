@@ -68,8 +68,8 @@ from datetime import datetime
 KIT = os.path.dirname(os.path.abspath(__file__))
 KIT_WS = os.path.join(KIT, "workspace")
 sys.path.insert(0, KIT_WS)
-from workspace_common import (MANIFEST, MARK_BEGIN, MARK_END,  # noqa: E402
-                              PROJECT_NAME, PROJECT_TEMPLATE, git,
+from workspace_common import (BOARD_THEMES, MANIFEST, MARK_BEGIN,  # noqa
+                              MARK_END, PROJECT_NAME, PROJECT_TEMPLATE, git,
                               git_identity, manifest_text, project_files,
                               project_tenant)
 
@@ -103,6 +103,10 @@ ANSWERS_ABOUT = {
                  "optional per-task HH:MM overrides.",
     "services": "Keys and what each costs, from the interview; kept for "
                 "the services file. Key names only, never values.",
+    "about_user": "Who the adopter is, in their own words (name, what they do, what to keep in mind); fills Memory/global/core-profile.md's \"Who the user is\" section. Missing leaves the template.",
+    "board_theme": "The dashboard's look: one of %s; missing means the "
+                   "first. Written to workspace.json board.theme."
+                   % ", ".join(BOARD_THEMES),
 }
 ANSWER_KEYS = set(ANSWERS_ABOUT) | {"_about"}
 
@@ -202,6 +206,8 @@ def validate(ans):
             errs.append("project name %r: letters, digits, - and _ only "
                         "(and not 'global')" % p)
     sch = ans.get("scheduler") or {"kind": "none"}
+    if ans.get("board_theme", BOARD_THEMES[0]) not in BOARD_THEMES:
+        errs.append("board_theme must be one of " + ", ".join(BOARD_THEMES))
     if sch.get("kind") not in ("windows", "none"):
         errs.append("scheduler.kind must be 'windows' or 'none'")
     if sch.get("kind") == "windows" and not sch.get("launch_command"):
@@ -495,7 +501,16 @@ class Installer:
             v = (self.ans.get("backup") or {}).get(k)
             if v:
                 cfg["backup"][k] = v
+        cfg.setdefault("board", {})["theme"] = self.ans.get(
+            "board_theme", BOARD_THEMES[0])
         tmpl_cfg = read_kit(os.path.join("workspace", "workspace.json"))
+        about = str(self.ans.get("about_user") or "").strip()
+        prof = read_kit(os.path.join("workspace", "Memory", "global",
+                                     "core-profile.md"))
+        blank = re.search(r"^\(Name, role[^)]*\)$", prof, re.M | re.S)
+        if about and blank:
+            self.put("Memory/global/core-profile.md",
+                     prof.replace(blank.group(0), about), replace_if=[prof])
         self.put("workspace.json", json.dumps(cfg, indent=2) + "\n",
                  replace_if=[tmpl_cfg])
         template = read_kit(os.path.join("tiers", "project.md"))

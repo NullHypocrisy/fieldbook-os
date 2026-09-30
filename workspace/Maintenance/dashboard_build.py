@@ -44,7 +44,8 @@ from datetime import datetime
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..")))
 sys.path.insert(0, HERE)
-from workspace_common import PROJECT_NAME, workspace_root  # noqa: E402
+from workspace_common import (BOARD_THEMES, PROJECT_NAME,  # noqa: E402
+                              workspace_root)
 import attention  # noqa: E402
 
 ROOT = workspace_root(HERE)
@@ -107,6 +108,27 @@ def more(shown, total, cols=0):
             if cols else '<div class="note more">%s</div>' % t)
 
 
+def stack(parts):
+    """A stacked state bar and its legend. parts: (label, count, colour
+    class) in display order; a zero part gets a legend entry, no segment."""
+    total = sum(n for _, n, _ in parts)
+    segs = "".join('<span class="k-%s" style="flex:%d">%s</span>'
+                   % (c, n, n) for _, n, c in parts if n)
+    bar = ('<div class="stack">%s</div>' % segs) if total else \
+        '<div class="stack"><span class="k-none" style="flex:1"></span></div>'
+    return bar + '<div class="legend">%s</div>' % "".join(
+        '<span><i class="key k-%s"></i>%s <b>%d</b></span>' % (c, esc(l), n)
+        for l, n, c in parts)
+
+
+def gauge(name, pct, cls, value):
+    """One labelled gauge row: name, bar filled to pct, value on the right."""
+    return ('<div class="grow"><div class="nm">%s</div><div class="gauge">'
+            '<i class="k-%s" style="width:%d%%"></i></div><div class="vv %s">'
+            '%s</div></div>' % (esc(name), cls, max(0, min(pct, 100)),
+                                cls, esc(value)))
+
+
 def run_log():
     """task -> (datetime, exit code, result) of its latest line."""
     last = {}
@@ -156,24 +178,59 @@ def latest_snapshot(dest):
     return dt, False
 
 
+# A work item's state on the board, in the order the Work tile lists them:
+# (key, label, colour class). The Run row is the user's launcher mark
+# (Scheduled/work-item-launcher/precheck.py reads the same row); a spec
+# without one has not had its decisions walked yet.
+WORK_STATES = (("ready", "Ready for launcher", "ok"),
+               ("blocked", "Blocked", "bad"),
+               ("undecided", "Needs decisions", "warn"),
+               ("attended", "Attended session", "acc"),
+               ("hold", "On hold", "hold"))
+RUN_ROW = re.compile(r"^\|\s*Run\s*\|\s*(.*?)\s*\|", re.I | re.M)
+DEPS_ROW = re.compile(r"^\|\s*Depends on\s*\|(.*)\|\s*$", re.I | re.M)
+
+
+def work_state(text, status, num, open_nums):
+    """A WORK_STATES key for one open spec. Blocked: its Status says so, or
+    its Depends on row names a work item still open."""
+    if status.startswith(("ON HOLD", "HOLD")):
+        return "hold"
+    deps = DEPS_ROW.search(text)
+    if status.startswith("BLOCKED") or (deps and any(
+            int(d) != num and int(d) in open_nums
+            for d in re.findall(r"\bWI-(\d+)\b", deps.group(1)))):
+        return "blocked"
+    run = RUN_ROW.search(text)
+    run = run.group(1).lower() if run else ""
+    if run.startswith("launcher"):
+        return "ready"
+    return "attended" if run.startswith("attended") else "undecided"
+
+
 def work_items():
-    """Open work items, priority order: dicts id, name, status, prio,
-    project (a spec's first line "project: NAME"; absent means global)."""
+    """Open work items, priority order: dicts id, name, status, prio, state
+    (WORK_STATES key), project (a spec's first line "project: NAME"; absent
+    means global)."""
     wdir = os.path.join(ROOT, "Work Items")
-    rows = []
+    rows, texts = [], {}
     for fn in sorted(os.listdir(wdir)) if os.path.isdir(wdir) else []:
         m = re.match(r"^(WI-(\d+))_.*\.md$", fn)
-        if not m:
-            continue
-        text = read(os.path.join(wdir, fn))
+        if m:
+            texts[fn] = (m, read(os.path.join(wdir, fn)))
+    open_nums = {int(m.group(2)) for m, _ in texts.values()}
+    for fn, (m, text) in sorted(texts.items()):
         proj = re.match(r"\s*project:\s*(\S+)", text)
         name = re.search(r"^name:\s*(.+)$", text, re.M) or re.search(
             r"^#\s+WI-\d+\s*[—-]+\s*(.+)$", text, re.M)
         status = re.search(r"^\|\s*Status\s*\|\s*(.+?)\s*\|", text, re.M)
         prio = re.search(r"^\|\s*Priority\s*\|.*?\b(P[0-3])\b", text, re.M)
-        st = (status.group(1).upper() if status else "UNKNOWN")
-        st = "IN PROGRESS" if st.startswith("IN PROGRESS") else st.split()[0]
+        raw = (status.group(1).upper() if status else "UNKNOWN")
+        st = "IN PROGRESS" if raw.startswith("IN PROGRESS") else \
+            "ON HOLD" if raw.startswith("ON HOLD") else raw.split()[0]
         rows.append({"prio": prio.group(1) if prio else "P9",
+                     "state": work_state(text, raw, int(m.group(2)),
+                                         open_nums),
                      "num": int(m.group(2)), "id": m.group(1),
                      "name": name.group(1).strip() if name else fn,
                      "status": st,
@@ -323,6 +380,7 @@ class Board:
 
     # ------------------------------------------------------------ header
     def header(self):
+        """The status chips at the right end of the tab bar."""
         chips = []
         doc = self.runs.get("doctor")
         if not doc:
@@ -346,18 +404,15 @@ class Board:
         else:
             chips.append('<div class="chip warn">Kit <b>not stamped</b> · '
                          'install unfinished</div>')
-        return ('<header>\n  <div class="wordmark">Fieldbook <span>OS</span>'
-                '</div>\n  <div class="ws">%s</div>\n  <div class="chips">\n'
-                '    %s\n  </div>\n  <div class="stamp">Board generated %s · '
-                'static page, regenerate any time</div>\n</header>\n'
-                % (esc(ROOT), "\n    ".join(chips),
-                   NOW.strftime("%a %Y-%m-%d %H:%M")))
+        return '<div class="chips">%s</div>' % "".join(chips)
 
     # -------------------------------------------------------------- tiles
     def tile(self, pid, label, fn):
         """Run one Global section: returns (kind, ribbon tile, glance card)
         and adds its drill-down page. A section that cannot read its
-        sources renders a red, filed note instead of failing the page."""
+        sources renders a red, filed note instead of failing the page.
+        A section returning "body" draws its whole ribbon tile itself;
+        "title" overrides the card's "<label> at a glance"."""
         self.kinds = []
         try:
             r = fn()
@@ -372,14 +427,17 @@ class Board:
             r = {"sub": "could not read", "glance": note, "detail": note}
         kind = r.get("kind") or worst(*self.kinds)
         self.page(pid, "home", label, r["detail"])
-        rt = ('<a class="lnk" href="#%s"><div class="rt %s"><div class="lab">'
-              '%s</div><div class="big">%s</div><div class="sub">%s</div>'
-              '</div></a>' % (pid, kind, esc(label),
-                              esc(r.get("big") or WORD[kind]),
-                              esc(r.get("sub", ""))))
-        card = ('<a class="lnk" href="#%s"><div class="card"><h3>%s</h3>%s'
-                '<div class="opens">Open %s &rarr;</div></div></a>'
-                % (pid, esc(label), r["glance"], esc(label)))
+        inner = r.get("body") or (
+            '<div class="lab">%s</div><div class="big">%s</div><div '
+            'class="sub">%s</div>' % (esc(label),
+                                      esc(r.get("big") or WORD[kind]),
+                                      esc(r.get("sub", ""))))
+        rt = '<a class="lnk" href="#%s"><div class="rt %s">%s</div></a>' % (
+            pid, kind, inner)
+        card = ('<a class="lnk" href="#%s"><div class="card c-%s"><h3>%s'
+                '</h3>%s<div class="opens">Open %s &rarr;</div></div></a>'
+                % (pid, pid[2:], esc(r.get("title") or label + " at a glance"),
+                   r["glance"], esc(label)))
         return kind, rt, card
 
     # --------------------------------------------------- waiting on you
@@ -414,6 +472,7 @@ class Board:
     def waiting(self, items):
         u = sum(1 for i in items if i.get("urgent"))
         return {"kind": self.attn_kind(items), "big": str(len(items)),
+                "title": "Waiting on you (%d)" % len(items),
                 "sub": ("%d urgent" % u) if u else "only you can act on these",
                 "glance": self.attn_list(items, GLANCE_ROWS),
                 "detail": '<div class="card">%s</div>' % self.attn_list(items)}
@@ -421,17 +480,19 @@ class Board:
     # -------------------------------------------------------------- work
     def work_table(self, rows, project_col=True, limit=None):
         out = ['<table><tr><th>Item</th><th>Name</th>%s<th>Status</th>'
-               '<th style="text-align:right">Priority</th></tr>'
+               '<th>State</th><th style="text-align:right">Priority</th></tr>'
                % ("<th>Project</th>" if project_col else "")]
+        states = {k: (lab, c) for k, lab, c in WORK_STATES}
         for r in rows[:limit]:
-            cls = "prog" if r["status"] == "IN PROGRESS" else "ready"
-            out.append('<tr><td>%s</td><td>%s</td>%s<td><span class="st %s">'
-                       '%s</span></td><td class="num">%s</td></tr>'
+            lab, c = states[r["state"]]
+            out.append('<tr><td class="id">%s</td><td>%s</td>%s<td>%s</td>'
+                       '<td><span class="st k-%s">%s</span></td><td '
+                       'class="num">%s</td></tr>'
                        % (r["id"], esc(r["name"]), "<td>%s</td>" % esc(
-                           r["project"]) if project_col else "", cls,
-                          esc(r["status"]),
+                           r["project"]) if project_col else "",
+                          esc(r["status"]), c, esc(lab),
                           r["prio"] if r["prio"] != "P9" else "—"))
-        cols = 5 if project_col else 4
+        cols = 6 if project_col else 5
         if not rows:
             out.append('<tr><td colspan="%d">No open work items.</td></tr>'
                        % cols)
@@ -441,19 +502,35 @@ class Board:
         return "".join(out)
 
     def work(self):
+        """Neutral by design: the tile's edge stays dim and only its state
+        rows carry colour. Tile: Projects at the left, Work items at the
+        right (the rows below add up to it). Card: a stacked state bar, then
+        open items per project."""
         rows = self.items()
         by = {}
         for r in rows:
             by[r["project"]] = by.get(r["project"], 0) + 1
-        glance = "".join('<div class="row"><div>%s</div><div class="r">%s'
-                         '</div></div>' % (esc(p), plural(n, "open item"))
-                         for p, n in sorted(by.items())) or \
-            '<div class="row"><div>No open work items.</div></div>'
+        count = {k: sum(r["state"] == k for r in rows)
+                 for k, _, _ in WORK_STATES}
+        heads = ('<div class="heads"><div><div class="hl">Projects</div>'
+                 '<div class="hn">%d</div></div><div class="hr"><div '
+                 'class="hl">Work items</div><div class="hn">%d</div></div>'
+                 '</div>' % (len(projects()), len(rows)))
+        wrows = '<div class="wrows">%s</div>' % "".join(
+            '<div class="wrow %s">%s<b>%d</b></div>' % (c, esc(lab), count[k])
+            for k, lab, c in WORK_STATES)
+        top = max(by.values()) if by else 1
+        bars = "".join(gauge(p, int(100 * n / top), "acc", str(n))
+                       for p, n in sorted(by.items(),
+                                          key=lambda x: (x[0] != "global",
+                                                         x[0])))
+        glance = stack([(lab, count[k], c) for k, lab, c in WORK_STATES]) + (
+            '<h4>By project</h4><div class="gbars">%s</div>' % bars if rows
+            else '<div class="note">No open work items.</div>')
         return {"kind": "idle", "big": str(len(rows)),
-                "sub": "across %s" % plural(len(by), "project")
-                if len(by) > 1 else "open items",
-                "glance": glance,
-                "detail": '<div class="card">%s</div>'
+                "title": "Work at a glance (%d open)" % len(rows),
+                "body": heads + wrows, "glance": glance,
+                "detail": '<div class="card"><div class="tw">%s</div></div>'
                           % self.work_table(rows)}
 
     # ------------------------------------------------------------ memory
@@ -483,8 +560,20 @@ class Board:
         return [("global", reg.get("global", {}))] + \
             sorted(reg.get("tenants", {}).items())
 
+    @staticmethod
+    def tenant_gauge(name, t):
+        """The glance card's gauge for one tenant (tenant_row marks it)."""
+        wm = os.path.join(ROOT, t.get("working_memory", ""))
+        cap = int(t.get("cap_chars", 0) or 0)
+        if not t.get("working_memory") or not os.path.isfile(wm):
+            return gauge(name, 0, "warn", "missing")
+        pct = int(100 * len(read(wm)) / cap) if cap else 0
+        return gauge(name, pct, "warn" if pct >= 75 else "ok", "%d%%" % pct)
+
     def memory(self):
-        rows = [self.tenant_row(n, t) for n, t in self.tenants()]
+        tens = self.tenants()
+        rows = [self.tenant_row(n, t) for n, t in tens]
+        gauges = [self.tenant_gauge(n, t) for n, t in tens]
         db = os.path.join(ROOT, "Memory", "index", "memory.db")
         if not os.path.exists(db):
             idx = ('<div class="note">%sSearch index never built — run '
@@ -506,8 +595,9 @@ class Board:
                                              "y" if logs == 1 else "ies"))
             sub = "index rebuilt " + when(built)
         return {"sub": "%s · %s" % (plural(len(rows), "tenant"), sub),
-                "glance": "".join(rows[:GLANCE_ROWS])
-                + more(GLANCE_ROWS, len(rows)) + idx,
+                "glance": '<div class="gbars">%s</div>' % "".join(
+                    gauges[:GLANCE_ROWS * 2])
+                + more(GLANCE_ROWS * 2, len(gauges)) + idx,
                 "detail": '<div class="card">%s%s</div>'
                           % ("".join(rows), idx)}
 
@@ -532,10 +622,11 @@ class Board:
             if not last:
                 never += 1
                 rows.append((1, '<tr><td>%s%s</td><td>never run</td><td>—'
-                             '</td></tr>' % (self.dot("warn"), label)))
+                             '</td></tr>' % (self.dot("warn"), label),
+                             ("never", label, "never run")))
                 continue
             dt, code, result = last
-            tail, rank = "", 2
+            tail, rank, state, said = "", 2, "ok", "ran fine"
             if code not in (0, 3):
                 failed += 1
                 k = "task:%s:failed" % t
@@ -543,32 +634,49 @@ class Board:
                              "last run (exit %d) - run it by hand from "
                              "Scheduled/%s/ and fix what it reports."
                              % (t, code, t))
-                tail, rank = "." + self.filed(k), 0
+                tail, rank, state = "." + self.filed(k), 0, "bad"
+                said = "failed, exit %d" % code
             elif code == 3 or age_days(dt) > STALE_DAYS.get(
                     sched.get("schedule"), 10 ** 6):
-                d, rank = self.dot("warn"), 1
+                d, rank, state = self.dot("warn"), 1, "warn"
+                said = "overdue" if code == 0 else "held for you"
                 if code == 0:
                     tail = " (overdue)"
             elif result.lower().startswith(("empty", "nothing")):
-                d = self.dot("idle")
+                d, state, said = self.dot("idle"), "idle", "nothing to do"
             else:
                 d = self.dot("ok")
             rows.append((rank, '<tr><td>%s%s</td><td>%s</td><td>%s%s</td>'
-                         '</tr>' % (d, label, when(dt), esc(result), tail)))
+                         '</tr>' % (d, label, when(dt), esc(result), tail),
+                         (state, label, "%s · %s%s" % (
+                             said, when(dt), tail if state == "bad"
+                             else ""))))
         head = '<table><tr><th>Task</th><th>Last run</th><th>Result</th></tr>'
         empty = '<tr><td colspan="3">No scheduled pieces installed yet.' \
                 '</td></tr>' if not rows else ""
-        first = [r for _, r in sorted(rows, key=lambda x: x[0])]
+        cells = [c for _, _, c in sorted(rows, key=lambda x: x[0])]
+        cells = [("warn" if s == "never" else s, lab, w)
+                 for s, lab, w in cells]
+        n = {s: sum(c[0] == s for c in cells)
+             for s in ("bad", "warn", "ok", "idle")}
+        grid = '<div class="tgrid cap">%s</div>' % "".join(
+            '<div class="tcell %s"><span class="tn">%s</span><span class="ts">'
+            '%s</span></div>' % (s, lab, esc(w))
+            for s, lab, w in cells) if cells else \
+            '<div class="note">No scheduled pieces installed yet.</div>'
         sub = [plural(len(rows), "task")]
         if failed:
             sub.append("%d failed" % failed)
         if never:
             sub.append("%d never run" % never)
         return {"sub": " · ".join(sub),
-                "glance": head + "".join(first[:GLANCE_ROWS]) + empty
-                + more(GLANCE_ROWS, len(rows), 3) + '</table>',
+                "glance": stack([("Failed", n["bad"], "bad"),
+                                 ("Needs a look", n["warn"], "warn"),
+                                 ("Ran fine", n["ok"], "ok"),
+                                 ("Nothing to do", n["idle"], "idle")])
+                + grid,
                 "detail": '<div class="card">%s%s%s</table></div>'
-                          % (head, "".join(r for _, r in rows), empty)}
+                          % (head, "".join(r for _, r, _ in rows), empty)}
 
     # ------------------------------------------------ backups and cleanup
     def backups(self):
@@ -869,134 +977,278 @@ class Board:
         return body + '<div class="note">Updated %s</div>' % when(mt)
 
 
+# THEMES: each look's colours, type and brand, keyed by the names in
+# workspace_common.BOARD_THEMES; workspace.json board.theme picks one.
+# CSS: the layout every look shares.
+THEMES = {
+    "auto": """/* auto: light, or dark when the computer is set to dark. */
+:root{--bg:#f6f8fa;--bar:#ffffff;--card:#ffffff;--line:#d8dee4;--txt:#1f2328;--dim:#656d76;--ok:#1a7f37;--warn:#9a6700;--bad:#cf222e;--acc:#0969da;--hold:#8250df;--well:#eef1f4;--onseg:#ffffff;--urgent-bg:#ffebe9;color-scheme:light;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#0f1115;--bar:#171a21;--card:#171a21;--line:#262b36;--txt:#dfe3ea;--dim:#8b93a3;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--acc:#58a6ff;--hold:#a371f7;--well:#0c0e12;--onseg:#0f1115;--urgent-bg:rgba(248,81,73,.15);color-scheme:dark;}}
+:root[data-theme="dark"]{--bg:#0f1115;--bar:#171a21;--card:#171a21;--line:#262b36;--txt:#dfe3ea;--dim:#8b93a3;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--acc:#58a6ff;--hold:#a371f7;--well:#0c0e12;--onseg:#0f1115;--urgent-bg:rgba(248,81,73,.15);color-scheme:dark;}
+:root{--radius:8px;
+  --font:13px/1.5 "Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  --mark-font:700 15px/1 "Segoe UI",system-ui,sans-serif}
+.brand .ws{margin-left:10px}
+""",
+    "dark": """/* dark: always dark. */
+:root{--bg:#0f1115;--bar:#171a21;--card:#171a21;--line:#262b36;--txt:#dfe3ea;--dim:#8b93a3;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--acc:#58a6ff;--hold:#a371f7;--well:#0c0e12;--onseg:#0f1115;--urgent-bg:rgba(248,81,73,.15);color-scheme:dark;}
+:root{--radius:8px;
+  --font:13px/1.5 "Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  --mark-font:700 15px/1 "Segoe UI",system-ui,sans-serif}
+.brand .ws{margin-left:10px}
+""",
+    "light": """/* light: always light. */
+:root{--bg:#f6f8fa;--bar:#ffffff;--card:#ffffff;--line:#d8dee4;--txt:#1f2328;--dim:#656d76;--ok:#1a7f37;--warn:#9a6700;--bad:#cf222e;--acc:#0969da;--hold:#8250df;--well:#eef1f4;--onseg:#ffffff;--urgent-bg:#ffebe9;color-scheme:light;}
+:root{--radius:8px;
+  --font:13px/1.5 "Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  --mark-font:700 15px/1 "Segoe UI",system-ui,sans-serif}
+.brand .ws{margin-left:10px}
+""",
+    "colorful-auto": """/* colorful auto: tinted light, or tinted dark when the computer is set to dark. */
+:root{--bg:#fbf7ff;--bar:rgba(255,255,255,.72);--card:#ffffff;--line:#e9e1f5;--txt:#221a33;--dim:#6e6284;--ok:#0f9f62;--warn:#d97706;--bad:#e5364a;--acc:#7c4dff;--info:#2f80ed;--hold:#d946ef;--well:#f3eefb;--onseg:#ffffff;--urgent-bg:#ffe4ea;color-scheme:light;--wash:radial-gradient(circle at 8% 0%,#ffe3f1 0,transparent 38%),radial-gradient(circle at 92% 10%,#dff3ff 0,transparent 40%),radial-gradient(circle at 50% 100%,#e6fbe9 0,transparent 45%);}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#15112a;--bar:rgba(28,22,54,.8);--card:#1f1a3a;--line:#332b58;--txt:#efeaff;--dim:#a59cc4;--ok:#34d399;--warn:#fbbf24;--bad:#fb7185;--acc:#a78bfa;--info:#60a5fa;--hold:#f0abfc;--well:#16122b;--onseg:#15112a;--urgent-bg:rgba(251,113,133,.16);color-scheme:dark;--wash:radial-gradient(circle at 8% 0%,rgba(236,72,153,.18) 0,transparent 38%),radial-gradient(circle at 92% 10%,rgba(56,189,248,.16) 0,transparent 40%),radial-gradient(circle at 50% 100%,rgba(52,211,153,.12) 0,transparent 45%);}}
+:root[data-theme="dark"]{--bg:#15112a;--bar:rgba(28,22,54,.8);--card:#1f1a3a;--line:#332b58;--txt:#efeaff;--dim:#a59cc4;--ok:#34d399;--warn:#fbbf24;--bad:#fb7185;--acc:#a78bfa;--info:#60a5fa;--hold:#f0abfc;--well:#16122b;--onseg:#15112a;--urgent-bg:rgba(251,113,133,.16);color-scheme:dark;--wash:radial-gradient(circle at 8% 0%,rgba(236,72,153,.18) 0,transparent 38%),radial-gradient(circle at 92% 10%,rgba(56,189,248,.16) 0,transparent 40%),radial-gradient(circle at 50% 100%,rgba(52,211,153,.12) 0,transparent 45%);}
+:root{--radius:14px;
+  --font:13.5px/1.5 "Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  --mark-font:800 16px/1 "Segoe UI",system-ui,sans-serif}
+body{background:var(--wash),var(--bg);background-attachment:fixed}
+.nav{backdrop-filter:blur(8px)}
+.brand .mark{background:linear-gradient(90deg,#ec4899,#8b5cf6,#0ea5e9);
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.brand .mark b{color:transparent}
+.brand .ws{margin-left:10px}
+.card,.rt{box-shadow:0 1px 2px rgba(60,30,120,.06),0 6px 18px -8px rgba(60,30,120,.18)}
+.rt:before{width:6px}
+.rt.ok{background:linear-gradient(135deg,color-mix(in srgb,var(--ok) 12%,var(--card)),var(--card) 70%)}
+.rt.warn{background:linear-gradient(135deg,color-mix(in srgb,var(--warn) 14%,var(--card)),var(--card) 70%)}
+.rt.bad{background:linear-gradient(135deg,color-mix(in srgb,var(--bad) 14%,var(--card)),var(--card) 70%)}
+.card{border-top:4px solid var(--hue,var(--acc))}
+.card h3{color:var(--hue,var(--txt))}
+.c-waiting{--hue:#ec4899} .c-scheduled{--hue:#0ea5e9} .c-work{--hue:#8b5cf6}
+.c-backups{--hue:#14b8a6} .c-memory{--hue:#f97316}
+.c-housekeeping{--hue:#65a30d} .c-bridge{--hue:#06b6d4}
+.stack,.gauge{border-radius:99px} .stack span:first-child{border-radius:99px 0 0 99px}
+.stack span:last-child{border-radius:0 99px 99px 0}
+.tcell{border-radius:10px}
+.nav a.active{border-bottom-width:3px}
+""",
+    "colorful-dark": """/* colorful dark: always tinted dark. */
+:root{--bg:#15112a;--bar:rgba(28,22,54,.8);--card:#1f1a3a;--line:#332b58;--txt:#efeaff;--dim:#a59cc4;--ok:#34d399;--warn:#fbbf24;--bad:#fb7185;--acc:#a78bfa;--info:#60a5fa;--hold:#f0abfc;--well:#16122b;--onseg:#15112a;--urgent-bg:rgba(251,113,133,.16);color-scheme:dark;--wash:radial-gradient(circle at 8% 0%,rgba(236,72,153,.18) 0,transparent 38%),radial-gradient(circle at 92% 10%,rgba(56,189,248,.16) 0,transparent 40%),radial-gradient(circle at 50% 100%,rgba(52,211,153,.12) 0,transparent 45%);}
+:root{--radius:14px;
+  --font:13.5px/1.5 "Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  --mark-font:800 16px/1 "Segoe UI",system-ui,sans-serif}
+body{background:var(--wash),var(--bg);background-attachment:fixed}
+.nav{backdrop-filter:blur(8px)}
+.brand .mark{background:linear-gradient(90deg,#ec4899,#8b5cf6,#0ea5e9);
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.brand .mark b{color:transparent}
+.brand .ws{margin-left:10px}
+.card,.rt{box-shadow:0 1px 2px rgba(60,30,120,.06),0 6px 18px -8px rgba(60,30,120,.18)}
+.rt:before{width:6px}
+.rt.ok{background:linear-gradient(135deg,color-mix(in srgb,var(--ok) 12%,var(--card)),var(--card) 70%)}
+.rt.warn{background:linear-gradient(135deg,color-mix(in srgb,var(--warn) 14%,var(--card)),var(--card) 70%)}
+.rt.bad{background:linear-gradient(135deg,color-mix(in srgb,var(--bad) 14%,var(--card)),var(--card) 70%)}
+.card{border-top:4px solid var(--hue,var(--acc))}
+.card h3{color:var(--hue,var(--txt))}
+.c-waiting{--hue:#ec4899} .c-scheduled{--hue:#0ea5e9} .c-work{--hue:#8b5cf6}
+.c-backups{--hue:#14b8a6} .c-memory{--hue:#f97316}
+.c-housekeeping{--hue:#65a30d} .c-bridge{--hue:#06b6d4}
+.stack,.gauge{border-radius:99px} .stack span:first-child{border-radius:99px 0 0 99px}
+.stack span:last-child{border-radius:0 99px 99px 0}
+.tcell{border-radius:10px}
+.nav a.active{border-bottom-width:3px}
+""",
+    "colorful-light": """/* colorful light: always tinted light. */
+:root{--bg:#fbf7ff;--bar:rgba(255,255,255,.72);--card:#ffffff;--line:#e9e1f5;--txt:#221a33;--dim:#6e6284;--ok:#0f9f62;--warn:#d97706;--bad:#e5364a;--acc:#7c4dff;--info:#2f80ed;--hold:#d946ef;--well:#f3eefb;--onseg:#ffffff;--urgent-bg:#ffe4ea;color-scheme:light;--wash:radial-gradient(circle at 8% 0%,#ffe3f1 0,transparent 38%),radial-gradient(circle at 92% 10%,#dff3ff 0,transparent 40%),radial-gradient(circle at 50% 100%,#e6fbe9 0,transparent 45%);}
+:root{--radius:14px;
+  --font:13.5px/1.5 "Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  --mark-font:800 16px/1 "Segoe UI",system-ui,sans-serif}
+body{background:var(--wash),var(--bg);background-attachment:fixed}
+.nav{backdrop-filter:blur(8px)}
+.brand .mark{background:linear-gradient(90deg,#ec4899,#8b5cf6,#0ea5e9);
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.brand .mark b{color:transparent}
+.brand .ws{margin-left:10px}
+.card,.rt{box-shadow:0 1px 2px rgba(60,30,120,.06),0 6px 18px -8px rgba(60,30,120,.18)}
+.rt:before{width:6px}
+.rt.ok{background:linear-gradient(135deg,color-mix(in srgb,var(--ok) 12%,var(--card)),var(--card) 70%)}
+.rt.warn{background:linear-gradient(135deg,color-mix(in srgb,var(--warn) 14%,var(--card)),var(--card) 70%)}
+.rt.bad{background:linear-gradient(135deg,color-mix(in srgb,var(--bad) 14%,var(--card)),var(--card) 70%)}
+.card{border-top:4px solid var(--hue,var(--acc))}
+.card h3{color:var(--hue,var(--txt))}
+.c-waiting{--hue:#ec4899} .c-scheduled{--hue:#0ea5e9} .c-work{--hue:#8b5cf6}
+.c-backups{--hue:#14b8a6} .c-memory{--hue:#f97316}
+.c-housekeeping{--hue:#65a30d} .c-bridge{--hue:#06b6d4}
+.stack,.gauge{border-radius:99px} .stack span:first-child{border-radius:99px 0 0 99px}
+.stack span:last-child{border-radius:0 99px 99px 0}
+.tcell{border-radius:10px}
+.nav a.active{border-bottom-width:3px}
+""",
+}
+
 CSS = """
-:root{
-  box-sizing:border-box;
-  padding-top:env(safe-area-inset-top,0px);
-  padding-bottom:env(safe-area-inset-bottom,0px);
-  --bg:#f7f5f0; --card:#ffffff; --ink:#22271f; --muted:#6f7568;
-  --line:#e4e1d8; --accent:#1f6f46; --ok:#1f7a4d; --warn:#a8730a;
-  --bad:#b3382f; --chip:#efece4; --urgent-bg:#fbeeec;
-}
-@media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]){
-    --bg:#14171a; --card:#1c2024; --ink:#e7e9e4; --muted:#98a094;
-    --line:#2b3036; --accent:#4fae7e; --ok:#4fae7e; --warn:#d59b3a;
-    --bad:#d96b62; --chip:#262b30; --urgent-bg:#33231f;
-  }
-}
-:root[data-theme="dark"]{
-  --bg:#14171a; --card:#1c2024; --ink:#e7e9e4; --muted:#98a094;
-  --line:#2b3036; --accent:#4fae7e; --ok:#4fae7e; --warn:#d59b3a;
-  --bad:#d96b62; --chip:#262b30; --urgent-bg:#33231f;
-}
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px)}
 html{scroll-padding-top:env(safe-area-inset-top,0px)}
 *{box-sizing:inherit}
-body{margin:0;background:var(--bg);color:var(--ink);
-  font:15px/1.55 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-.wrap{max-width:1180px;margin:0 auto;padding:26px 16px 56px}
-header{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px 18px;
-  border-bottom:2px solid var(--ink);padding-bottom:14px;margin-bottom:0}
-.wordmark{font-family:Georgia,"Times New Roman",serif;font-size:26px;
-  font-weight:700;letter-spacing:.2px}
-.wordmark span{color:var(--accent)}
-.ws{color:var(--muted);font-size:13px;overflow-wrap:anywhere}
-.chips{margin-left:auto;display:flex;flex-wrap:wrap;gap:8px}
-.chip{background:var(--chip);border:1px solid var(--line);border-radius:999px;
-  padding:3px 11px;font-size:12.5px;white-space:nowrap}
-.chip b{font-weight:600}
-.chip.ok b{color:var(--ok)} .chip.warn b{color:var(--warn)}
-.chip.bad b{color:var(--bad)}
-.stamp{width:100%;color:var(--muted);font-size:12.5px}
-.nav{display:flex;flex-wrap:wrap;gap:2px;border-bottom:1px solid var(--line);
-  margin:0 0 18px;position:sticky;top:0;background:var(--bg);z-index:5}
-.nav a{padding:9px 13px;font-size:13.5px;font-weight:600;color:var(--muted);
-  text-decoration:none;border-bottom:2px solid transparent}
-.nav a:hover{color:var(--ink)}
-.nav a.active{color:var(--ink);border-bottom-color:var(--accent)}
+body{margin:0;background:var(--bg);color:var(--txt);font:var(--font)}
+.nav{display:flex;flex-wrap:wrap;align-items:center;gap:2px;padding:0 20px;
+  border-bottom:1px solid var(--line);background:var(--bar);position:sticky;
+  top:0;z-index:5}
+.brand{margin-right:12px;white-space:nowrap}
+.brand .mark{font:var(--mark-font);color:var(--txt)}
+.brand .mark b{color:var(--acc);font-weight:inherit}
+.brand .ws{font:600 12px/1 Consolas,Menlo,monospace;color:var(--dim);
+  letter-spacing:.4px}
+.nav a{padding:10px 13px;font-size:12.5px;font-weight:600;color:var(--dim);
+  text-decoration:none;border-bottom:2px solid transparent;letter-spacing:.3px}
+.nav a:hover{color:var(--txt)}
+.nav a.active{color:var(--txt);border-bottom-color:var(--acc)}
 .tabdot{display:inline-block;width:7px;height:7px;border-radius:50%;
-  margin-left:7px;vertical-align:middle;background:var(--muted)}
+  margin-left:7px;vertical-align:middle;background:var(--dim)}
 .tabdot.ok{background:var(--ok)} .tabdot.warn{background:var(--warn)}
 .tabdot.bad{background:var(--bad)}
-.page{display:none} .page.show{display:block}
-h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;
-  color:var(--muted);margin:0 0 12px;font-weight:600}
-.card h3{font-size:14.5px;margin:0 0 8px;font-weight:600}
+.chips{margin-left:auto;display:flex;flex-wrap:wrap;gap:6px;padding:6px 0}
+.chip{background:var(--well);border:1px solid var(--line);border-radius:999px;
+  padding:1px 10px;font-size:11.5px;white-space:nowrap;color:var(--dim)}
+.chip b{font-weight:700;color:var(--txt)}
+.chip.ok b{color:var(--ok)} .chip.warn b{color:var(--warn)}
+.chip.bad b{color:var(--bad)}
+.page{display:none;padding:0 20px} .page.show{display:block}
+h2{font-size:12px;letter-spacing:1.2px;text-transform:uppercase;
+  color:var(--dim);margin:6px 0 10px;font-weight:600}
+.card{background:var(--card);border:1px solid var(--line);
+  border-radius:var(--radius);padding:11px 13px;min-width:0}
+.card h3{font-size:13.5px;margin:0 0 8px;font-weight:600}
+.card h4{font-size:11px;margin:11px 0 5px;font-weight:600;color:var(--dim);
+  text-transform:uppercase;letter-spacing:.8px}
 a.lnk{text-decoration:none;color:inherit;display:block;min-width:0}
-a.lnk .card,a.lnk .rt{transition:border-color .12s}
-a.lnk:hover .card,a.lnk:hover .rt{border-color:var(--accent)}
-.opens{font-size:12.5px;color:var(--accent);margin-top:10px;font-weight:600}
-.ribbon{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
-  gap:10px;margin-bottom:16px}
+a.lnk .card,a.lnk .rt{transition:border-color .12s,transform .12s}
+a.lnk:hover .card,a.lnk:hover .rt{border-color:var(--acc)}
+a.lnk:hover .card{transform:translateY(-1px)}
+.opens{font-size:11px;color:var(--acc);margin-top:9px;font-weight:600;
+  letter-spacing:.3px}
+.ribbon{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+  gap:12px;padding:14px 0 12px}
 .ribbon a.lnk{display:flex}
 .rt{flex:1;background:var(--card);border:1px solid var(--line);
-  border-radius:10px;padding:8px 12px 9px 15px;position:relative;
-  overflow:hidden}
+  border-radius:var(--radius);padding:8px 12px 9px 15px;position:relative;
+  overflow:hidden;display:flex;flex-direction:column;justify-content:center}
 .rt:before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;
-  background:var(--muted)}
+  background:var(--dim)}
 .rt.ok:before{background:var(--ok)} .rt.warn:before{background:var(--warn)}
 .rt.bad:before{background:var(--bad)}
-.rt .lab{font-size:11px;letter-spacing:.08em;text-transform:uppercase;
-  color:var(--muted);font-weight:600}
-.rt .big{font-size:21px;font-weight:700;line-height:1.25}
+.rt .lab{font-size:10.5px;letter-spacing:1.3px;text-transform:uppercase;
+  color:var(--dim);font-weight:600}
+.rt .big{font-size:22px;font-weight:700;line-height:1.15;margin:1px 0}
 .rt.ok .big{color:var(--ok)} .rt.warn .big{color:var(--warn)}
 .rt.bad .big{color:var(--bad)}
-.rt .sub{font-size:12px;color:var(--muted);line-height:1.3}
-.cols{display:grid;gap:16px;align-items:start;
-  grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
-@media (min-width:1000px){.cols{grid-template-columns:repeat(3,1fr)}}
-.col{display:flex;flex-direction:column;gap:16px;min-width:0}
-@media (max-width:660px){.cols{display:flex;flex-direction:column}
+.rt .sub{font-size:11.5px;color:var(--dim);line-height:1.3}
+.heads{display:flex;flex-wrap:wrap;justify-content:space-between;
+  align-items:flex-start;gap:0 12px;margin:0 0 2px}
+.heads .hl{font-size:10.5px;letter-spacing:1.1px;text-transform:uppercase;
+  color:var(--dim);font-weight:600;white-space:nowrap}
+.heads .hn{font-size:22px;font-weight:700;line-height:1.15}
+.heads .hr{text-align:right;margin-left:auto}
+.wrows{display:flex;flex-direction:column;gap:2px;margin-top:3px}
+.wrow{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+  padding-left:7px;border-left:3px solid var(--dim);font-weight:600;
+  font-size:12.5px;color:var(--dim)}
+.wrow.ok{border-color:var(--ok);color:var(--ok)}
+.wrow.warn{border-color:var(--warn);color:var(--warn)}
+.wrow.bad{border-color:var(--bad);color:var(--bad)}
+.wrow.acc{border-color:var(--info,var(--acc));color:var(--info,var(--acc))}
+.wrow.hold{border-color:var(--hold);color:var(--hold)}
+.cols{display:grid;gap:12px;align-items:start;
+  grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+@media (min-width:1100px){.cols{grid-template-columns:repeat(3,1fr)}}
+.col{display:flex;flex-direction:column;gap:12px;min-width:0}
+@media (max-width:700px){.cols{display:flex;flex-direction:column}
   .col{display:contents}}
-.hint{color:var(--muted);font-size:12.5px;margin-top:16px}
-.crumb{font-size:13px;margin:0 0 8px}
-.crumb a{color:var(--accent);text-decoration:none;font-weight:600}
-.crumb .ctx{color:var(--muted)}
-.banner{border:1px solid var(--warn);color:var(--warn);border-radius:8px;
-  padding:9px 12px;font-size:14px;font-weight:600;background:var(--card)}
+.k-ok{background:var(--ok)} .k-warn{background:var(--warn)}
+.k-bad{background:var(--bad)} .k-acc{background:var(--info,var(--acc))}
+.k-hold{background:var(--hold)} .k-dim,.k-idle{background:var(--dim)}
+.k-none{background:var(--well)}
+.stack{display:flex;height:20px;border-radius:5px;overflow:hidden;
+  margin:2px 0 7px;background:var(--well)}
+.stack span{display:flex;align-items:center;justify-content:center;
+  font-size:10px;font-weight:700;color:var(--onseg);min-width:0}
+.legend{display:flex;gap:4px 13px;flex-wrap:wrap;font-size:11px;
+  color:var(--dim);margin-bottom:3px}
+.legend b{color:var(--txt)}
+.key{display:inline-block;width:9px;height:9px;border-radius:2px;
+  margin-right:5px}
+.gbars{display:grid;grid-template-columns:max-content 1fr 46px;column-gap:8px;
+  row-gap:4px;align-items:center;font-size:12px}
+.grow{display:contents}
+.grow .nm{color:var(--dim);white-space:nowrap}
+.gauge{height:7px;background:var(--well);border-radius:4px;overflow:hidden}
+.gauge i{display:block;height:100%;border-radius:4px}
+.grow .vv{text-align:right;font:11px Consolas,Menlo,monospace}
+.vv.ok{color:var(--ok)} .vv.warn{color:var(--warn)} .vv.acc{color:var(--txt)}
+.tgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));
+  gap:5px}
+.tgrid.cap{max-height:190px;overflow-y:auto}
+.tcell{border:1px solid var(--line);border-left:3px solid var(--dim);
+  border-radius:6px;padding:5px 7px;font-size:11px;background:var(--well)}
+.tcell.ok{border-left-color:var(--ok)} .tcell.warn{border-left-color:var(--warn)}
+.tcell.bad{border-left-color:var(--bad)}
+.tcell .tn{display:block;font-weight:600;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.tcell.ok .tn{color:var(--ok)} .tcell.bad .tn{color:var(--bad)}
+.tcell.warn .tn{color:var(--warn)}
+.tcell .ts{display:block;color:var(--dim);font-size:10px}
+.hint{color:var(--dim);font-size:11.5px;margin:12px 0 0}
+.crumb{font-size:12px;margin:14px 0 6px}
+.crumb a{color:var(--acc);text-decoration:none;font-weight:600}
+.crumb .ctx{color:var(--dim)}
+.banner{border:1px solid var(--warn);color:var(--warn);border-radius:6px;
+  padding:7px 10px;font-size:12px;font-weight:600;background:var(--card);
+  margin-top:14px}
 .wl{margin:0;padding:0;list-style:none;display:grid;gap:9px}
-.wl li{display:flex;gap:10px;align-items:baseline}
-.tag{font-size:11px;font-weight:700;letter-spacing:.05em;border-radius:5px;
-  padding:1px 7px;white-space:nowrap}
-.tag.urgent{background:var(--urgent-bg);color:var(--bad)}
-.tag.normal{background:var(--chip);color:var(--muted)}
-.wl .src{color:var(--muted);font-size:12.5px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:16px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;
-  padding:15px 17px;min-width:0}
-table{width:100%;border-collapse:collapse;font-size:14px}
-th{text-align:left;color:var(--muted);font-weight:600;font-size:12px;
-  letter-spacing:.05em;text-transform:uppercase;padding:4px 8px 6px 0}
-td{padding:6px 8px 6px 0;border-top:1px solid var(--line);vertical-align:top;
+.wl li{display:flex;gap:10px;align-items:baseline;font-size:12.5px}
+.tag{font:700 11px Consolas,Menlo,monospace;white-space:nowrap}
+.tag.urgent{background:var(--urgent-bg);color:var(--bad);border-radius:5px;
+  padding:1px 6px;font-family:inherit;letter-spacing:.05em}
+.tag.normal{color:var(--acc)}
+.wl .src{color:var(--dim);font-size:11px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));
+  gap:12px;margin-top:14px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;color:var(--dim);font-weight:600;font-size:11px;
+  letter-spacing:.05em;text-transform:uppercase;padding:3px 8px 5px 0}
+td{padding:5px 8px 5px 0;border-top:1px solid var(--line);vertical-align:top;
   overflow-wrap:anywhere}
+td.id{font-family:Consolas,Menlo,monospace;color:var(--acc);white-space:nowrap}
 td.num{text-align:right;white-space:nowrap}
-td.k{color:var(--muted);white-space:nowrap}
-tr.more td,.note.more{color:var(--muted);font-style:italic}
+td.k{color:var(--dim);white-space:nowrap}
+tr.more td,.note.more{color:var(--dim);font-style:italic}
 .tw{overflow-x:auto}
-.st{font-size:12px;font-weight:600;border-radius:5px;padding:1px 7px;white-space:nowrap}
-.st.prog{background:var(--chip);color:var(--accent)}
-.st.ready{background:var(--chip);color:var(--muted)}
-.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;
-  vertical-align:baseline}
-.dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.idle{background:var(--muted)}
-.dot.bad{background:var(--bad)}
-.row{display:flex;justify-content:space-between;gap:12px;padding:6px 0;
-  border-top:1px solid var(--line);font-size:14px}
+.st{font-size:10.5px;font-weight:700;border-radius:9px;padding:1px 8px;
+  white-space:nowrap;color:var(--onseg)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;
+  margin-right:8px;vertical-align:baseline}
+.dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)}
+.dot.idle{background:var(--dim)} .dot.bad{background:var(--bad)}
+.row{display:flex;justify-content:space-between;gap:12px;padding:5px 0;
+  border-top:1px solid var(--line);font-size:12.5px}
 .row:first-of-type{border-top:0}
-.row .r{color:var(--muted);text-align:right;overflow-wrap:anywhere}
-.bar{height:7px;background:var(--chip);border-radius:99px;overflow:hidden;margin-top:5px}
-.bar i{display:block;height:100%;background:var(--accent);border-radius:99px}
-.bar i.warn{background:var(--warn)}
-.mem{padding:7px 0;border-top:1px solid var(--line)}
+.row .r{color:var(--dim);text-align:right;overflow-wrap:anywhere}
+.mem{padding:6px 0;border-top:1px solid var(--line)}
 .mem:first-of-type{border-top:0}
-.mem .t{display:flex;justify-content:space-between;gap:10px;font-size:14px}
-.mem .t span{color:var(--muted);font-size:12.5px}
-.note{color:var(--muted);font-size:12.5px;margin-top:9px}
+.mem .t{display:flex;justify-content:space-between;gap:10px;font-size:12.5px}
+.mem .t span{color:var(--dim);font-size:11.5px}
+.bar{height:7px;background:var(--well);border-radius:99px;overflow:hidden;
+  margin-top:4px}
+.bar i{display:block;height:100%;background:var(--ok);border-radius:99px}
+.bar i.warn{background:var(--warn)}
+.note{color:var(--dim);font-size:11.5px;margin-top:8px}
 pre.mono{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;
-  font:12.5px/1.45 Consolas,Menlo,monospace}
-footer{margin-top:26px;color:var(--muted);font-size:12.5px;display:flex;
-  flex-wrap:wrap;gap:6px 18px}
-code{background:var(--chip);border-radius:5px;padding:1px 6px;font-size:12.5px}
+  font:12px/1.45 Consolas,Menlo,monospace}
+code{background:var(--well);border-radius:5px;padding:1px 6px;
+  font:11.5px Consolas,Menlo,monospace}
+footer{color:var(--dim);font-size:11px;padding:22px 20px 28px;display:grid;
+  gap:3px}
 """
 
 # Hash router: shows the page the address names (home when it names none),
@@ -1024,26 +1276,44 @@ JS = """
 """
 
 
-def columns(cards, n=3):
-    """Glance cards round-robin into n self-packing columns."""
-    n = max(1, min(n, len(cards)))
-    # The order style puts the cards back in tile order when a narrow
+# The Global tab. RIBBON: the across-the-room tiles, left to right. CARDS:
+# the glance cards in their columns; every section has a card, and a
+# section without a tile still colours the Global tab's dot.
+RIBBON = ("g-waiting", "g-scheduled", "g-backups", "g-memory", "g-work")
+CARDS = (("g-waiting", "g-scheduled"), ("g-work", "g-backups"),
+         ("g-memory", "g-housekeeping", "g-bridge"))
+
+
+def columns(cards):
+    """Glance cards into the CARDS columns, each packing its own height."""
+    # The order style puts the cards back in reading order when a narrow
     # screen collapses the columns into one (see .cols in CSS).
-    cards = [c.replace('<a class="lnk"', '<a class="lnk" style="order:%d"'
-                       % i, 1) for i, c in enumerate(cards)]
-    cols = [cards[i::n] for i in range(n)]
+    order = [p for col in CARDS for p in col]
     return '<div class="cols">%s</div>' % "".join(
-        '<div class="col">%s</div>' % "".join(c) for c in cols)
+        '<div class="col">%s</div>' % "".join(
+            cards[p].replace('<a class="lnk"', '<a class="lnk" style='
+                             '"order:%d"' % order.index(p), 1) for p in col)
+        for col in CARDS)
 
 
 def build(out_path):
     b = Board()
     try:
-        head = b.header()
+        chips = b.header()
     except Exception as e:  # noqa: BLE001 - the page must still build
         print("WARN header: %s: %s" % (type(e).__name__, e))
-        head = '<header><div class="wordmark">Fieldbook <span>OS</span>' \
-               '</div></header>'
+        chips = ""
+    try:
+        look = json.loads(read(os.path.join(ROOT, "workspace.json"))).get(
+            "board", {}).get("theme") or BOARD_THEMES[0]
+    except (OSError, ValueError, AttributeError):
+        look = BOARD_THEMES[0]
+    if look not in THEMES:
+        chips = chips.replace('<div class="chips">', '<div class="chips">'
+                              '<div class="chip warn">Look <b>%s</b> unknown'
+                              ' · using %s</div>' % (esc(str(look)),
+                                                    BOARD_THEMES[0]), 1)
+        look = BOARD_THEMES[0]
     sections = [("g-waiting", "Waiting on you", None),
                 ("g-work", "Work", b.work), ("g-memory", "Memory", b.memory),
                 ("g-scheduled", "Scheduled pieces", b.scheduled),
@@ -1077,10 +1347,10 @@ def build(out_path):
                                 lambda: b.waiting(items))
     order = [pid for pid, _, _ in sections]
     ribbon = '<div class="ribbon">%s</div>' % "".join(
-        built[p][1] for p in order)
+        built[p][1] for p in RIBBON)
     home = ('<div class="page" id="page-home">%s%s<p class="hint">Every tile '
             'and card opens its own page.</p></div>'
-            % (ribbon, columns([built[p][2] for p in order])))
+            % (ribbon, columns({p: built[p][2] for p in order})))
     # Work is neutral by design and never colours the Global dot.
     kinds = {"home": worst(*[built[p][0] for p in order if p != "g-work"]
                            + ["bad" if "doctor" in b.reds else "ok"])}
@@ -1092,24 +1362,29 @@ def build(out_path):
             mine, empty="Nothing is waiting on you for this project."))
     for pid, ks in b.tab_kind.items():
         kinds[pid] = worst(*ks)
-    nav = '<nav class="nav">%s</nav>' % "".join(
-        '<a id="nav-%s" href="#%s">%s<span class="tabdot %s"></span></a>'
-        % (pid, pid, esc(label), kinds.get(pid, "ok"))
-        for pid, label in b.tabs)
+    nav = ('<nav class="nav"><div class="brand" title="%s"><span class="mark">'
+           'Fieldbook <b>OS</b></span><span class="ws">%s</span></div>%s%s'
+           '</nav>' % (esc(ROOT), esc(ROOT), "".join(
+               '<a id="nav-%s" href="#%s">%s<span class="tabdot %s"></span>'
+               '</a>' % (pid, pid, esc(label), kinds.get(pid, "ok"))
+               for pid, label in b.tabs), chips))
 
-    body = "\n".join([head, nav, home, body_tabs] + b.pages)
+    body = "\n".join([nav, home, body_tabs] + b.pages)
     for k, iid in ids.items():
         body = body.replace("\x00%s\x00" % k, esc(iid))
     page = ('<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">'
             '\n<meta name="viewport" content="width=device-width, '
             'initial-scale=1, viewport-fit=cover">\n<title>Fieldbook OS — '
-            'Board</title>\n<style>%s</style>\n<noscript><style>.page{display:'
-            'block;margin-bottom:28px}</style></noscript>\n</head>\n<body>\n'
-            '<div class="wrap">\n%s\n<footer>\n  <div>Regenerate: <code>python '
-            'Maintenance/dashboard_build.py</code></div>\n  <div>Everything '
-            'above is read from your own files — nothing leaves this machine.'
-            '</div>\n</footer>\n</div>\n<script>%s</script>\n</body>\n</html>\n'
-            % (CSS, body, JS % json.dumps(b.parent, sort_keys=True)))
+            'Board</title>\n<style>%s%s</style>\n<noscript><style>.page{'
+            'display:block;margin-bottom:28px}</style></noscript>\n</head>\n'
+            '<body>\n%s\n<footer>\n  <div class="stamp">Board built %s · a '
+            'static page, regenerate any time: <code>python '
+            'Maintenance/dashboard_build.py</code></div>\n  <div>Workspace %s '
+            '· everything above is read from your own files; nothing leaves '
+            'this machine.</div>\n</footer>\n<script>%s</script>\n</body>\n'
+            '</html>\n' % (CSS, THEMES[look], body, NOW.strftime("%a %Y-%m-%d %H:%M"),
+                           esc(ROOT), JS % json.dumps(b.parent,
+                                                      sort_keys=True)))
     tmp = out_path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(page)
