@@ -94,6 +94,8 @@ def make_kits(tmp):
     b = "%d.%d.0" % (ma, mi + 1)
     with open(vp, "w", encoding="utf-8") as f:
         f.write(b + "\n" + "".join(lines[1:]))
+    append(os.path.join(kb, "CHANGELOG.md"),
+           "\n## %s (test)\n\n- Synthesized by upgrade_selftest.py.\n" % b)
     kw = os.path.join(kb, "workspace")
     append(fp(kw, MOD), "\nChanged in B.\n")
     append(fp(kw, MOD2), "\nAlso changed in B.\n")

@@ -7,14 +7,18 @@ installation reports to tell files the adopter never touched from files
 they changed. Every manifest ever released stays in manifests/, so a newer
 kit can upgrade from any older version.
 
-Release path: change kit files, bump VERSION, run this, commit both. Until a
+Release path: change kit files, bump VERSION, add the version's entry to
+CHANGELOG.md (a "## <version> (<date>)" heading and at least one line
+under it), run this, commit all three. Until a
 version is published its manifest may be regenerated; once published it is
 never rewritten (bump VERSION instead). The kit's smoke test runs --check,
-so a changed file with a stale manifest fails the kit's own test.
+so a changed file with a stale manifest, or a version with no changelog
+entry, fails the kit's own test.
 
 Usage:  python release_manifest.py [--check]
 Exit codes (tools/EXIT-CODES.md): 0 written, or current; 1 crashed;
-2 broken (VERSION unreadable); 3 --check found it missing or stale.
+2 broken (VERSION unreadable); 3 --check found it missing or stale, or
+CHANGELOG.md has no entry for the version (either mode).
 """
 
 import argparse
@@ -28,6 +32,19 @@ sys.path.insert(0, KIT)
 import install  # noqa: E402
 
 MANIFESTS = os.path.join(KIT, "manifests")
+CHANGELOG = os.path.join(KIT, "CHANGELOG.md")
+
+
+def changelog_has(version):
+    """True when CHANGELOG.md has a "## <version>" heading with at least
+    one non-blank line before the next heading."""
+    try:
+        text = open(CHANGELOG, encoding="utf-8").read()
+    except OSError:
+        return False
+    m = re.search(r"^## %s\b.*\n((?:(?!^## ).*\n?)*)" % re.escape(version),
+                  text, re.M)
+    return bool(m and m.group(1).strip())
 
 
 def kit_version(kit=KIT):
@@ -58,6 +75,9 @@ def main():
     except (OSError, ValueError) as e:
         print("BROKEN: %s" % e)
         return 2
+    if not changelog_has(v):
+        print("MISSING: CHANGELOG.md has no entry for %s; add a \"## %s (date)\" heading with a line or two on what changed" % (v, v))
+        return 3
     p = os.path.join(MANIFESTS, v + ".json")
     want = manifest_text(v)
     cur = open(p, encoding="utf-8").read() if os.path.exists(p) else None
