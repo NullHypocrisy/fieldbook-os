@@ -8,6 +8,7 @@ places them; the import depends on that layout.
 
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -38,12 +39,46 @@ def manifest_tracked(rel):
         rel.startswith("Projects/") and rel.count("/") >= 2))
 
 
-# Projects: one name shared by a memory tenant, a Projects/<name>/ folder and
-# an Agent Bridge/to-<name>/ inbox. Projects/README.md owns the folder shape
-# and the dashboard.json format. The rules template is the kit's
-# tiers/project.md, which install.py copies to PROJECT_TEMPLATE.
+# Projects: one short name (project_slug of the name as typed) shared by a
+# memory tenant, a Projects/<name>/ folder and an Agent Bridge/to-<name>/
+# inbox; the typed name is the dashboard tab's title. Projects/README.md
+# owns the folder shape and the dashboard.json format. The rules template
+# is the kit's tiers/project.md, which install.py copies to
+# PROJECT_TEMPLATE.
 PROJECT_NAME = r"^[A-Za-z0-9][A-Za-z0-9_-]*$"
 PROJECT_TEMPLATE = "Setup/project-template.md"
+
+
+def project_slug(name):
+    """The folder-safe short name for a project typed as free text: each
+    run of characters PROJECT_NAME rejects becomes '-', ends trimmed, so a
+    name already valid is its own slug. "" when nothing usable is left."""
+    name = str(name).strip()
+    if re.match(PROJECT_NAME, name):
+        return name
+    return re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-_")
+
+
+def project_slugs(names):
+    """[(typed name, slug)] for names, or raise ValueError naming every
+    name that cannot be a project: empty slug, 'global', or a slug two
+    names share."""
+    pairs = [(str(n), project_slug(n)) for n in names]
+    bad = ["%r (nothing usable in it)" % n for n, s in pairs if not s]
+    bad += ["%r (the name 'global' is the workspace's own)" % n
+            for n, s in pairs if s.lower() == "global"]
+    seen = {}
+    for n, s in pairs:
+        seen.setdefault(s.lower(), []).append(n)
+    bad += ["%s (all become %r)" % (" and ".join(repr(n) for n in ns),
+                                    project_slug(ns[0]))
+            for k, ns in seen.items() if k and len(ns) > 1]
+    if bad:
+        raise ValueError("project names that cannot be used: "
+                         + "; ".join(bad))
+    return pairs
+
+
 STARTER_PANELS = ("work", "memory", "inbox", "attention")
 
 # Board looks, chosen at install (workspace.json "board" -> "theme"); the
@@ -60,10 +95,12 @@ def project_tenant(name):
                         "include": ["working-memory.md", "logs/*.md"]}]}
 
 
-def project_files(name, template):
+def project_files(name, template, title=None):
     """{workspace-relative path: text} a new project needs besides its
-    tenants.json entry. template: the rules template text."""
-    board = {"title": name, "panels": [{"type": t} for t in STARTER_PANELS]}
+    tenants.json entry. name: the slug; template: the rules template text;
+    title: the name as typed, shown on its dashboard tab (default name)."""
+    board = {"title": title or name,
+             "panels": [{"type": t} for t in STARTER_PANELS]}
     return {
         "Memory/%s/working-memory.md" % name:
             "# %s working memory (cap in tenants.json)\nThe standing present "

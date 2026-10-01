@@ -1,12 +1,14 @@
 """smoke_test.py - prove the installation works, end to end.
 
 Works in a throwaway temp folder, so the real workspace is untouched. The
-copy is a simulated fresh clone: only what git would carry (the .gitignore
-rules applied, the kit root's too when run inside the kit, empty folders
-dropped) and none of the runtime state the checks start without. The board
+copy is a simulated fresh install: only the files the install manifest
+lists (the kit's own file list inside the kit), never the adopter's
+bridge messages, work items, memory logs or project folders, and none of
+the runtime state the checks start without. The board
 is built on the fresh copy (every section in its empty state), on the
-populated tree, and with two projects added by new_project.py (custom
-panels fresh and stale, one broken tab definition). The procedure trigger index is regenerated, extended and
+populated tree, and with projects added by new_project.py (custom
+panels fresh and stale, one broken tab definition, one name typed with
+spaces). The procedure trigger index is regenerated, extended and
 broken on purpose. Every scheduled task's precheck proves EMPTY on the
 fresh copy and WORK on a planted case, and the wrappers run. The restore
 drill passes on a real snapshot and fails on a planted corruption. Then the
@@ -32,7 +34,8 @@ from datetime import date, datetime, timedelta
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
 from workspace_common import (MANIFEST, MARK_BEGIN, MARK_END,  # noqa: E402
                               PROJECT_TEMPLATE, SMOKE_NESTED, git,
-                              git_identity, manifest_text, workspace_root)
+                              git_identity, manifest_text, project_files,
+                              workspace_root)
 
 
 SRC = workspace_root(os.path.dirname(os.path.abspath(__file__)))
@@ -40,6 +43,8 @@ FAILURES = []
 # Runtime state a fresh installation does not have yet.
 RUNTIME = ("__pycache__", ".git", "memory.db", "*.log", "*_log.txt",
            "attention.json", "dashboard.html", "VERSION")
+# Amber states the board also files (dashboard_build.py, marking principle).
+NOTICES = ("board:backup:none",)
 
 
 def ignore_rules():
@@ -67,8 +72,69 @@ def ignore_rules():
     return rules
 
 
+def clone_list(src):
+    """Workspace-relative paths a fresh install of src holds: the install
+    manifest's files plus the installer's .gitignore and project template
+    in an installed workspace; the kit's own file list (what install.py
+    copies) inside the kit; None for a workspace with neither."""
+    extra = [".gitignore", PROJECT_TEMPLATE]
+    mp = os.path.join(src, *MANIFEST.split("/"))
+    if os.path.exists(mp):
+        with open(mp, encoding="utf-8-sig") as f:
+            return json.load(f)["files"] + extra
+    kit = os.path.abspath(os.path.join(src, ".."))
+    if os.path.exists(os.path.join(kit, "install.py")):
+        sys.path.insert(0, kit)
+        import install
+        return [r.replace("\\", "/") for r in install.kit_files()] + extra
+    return None
+
+
+def scaffold_projects(ws):
+    """Give each project tenant the copy's tenants.json names, and whose
+    working memory the copy lacks, the fresh files a new project gets."""
+    tp = os.path.join(ws, *PROJECT_TEMPLATE.split("/"))
+    try:
+        with open(os.path.join(ws, "Memory", "tenants.json"),
+                  encoding="utf-8") as f:
+            names = sorted(json.load(f).get("tenants", {}))
+        with open(tp, encoding="utf-8") as f:
+            template = f.read()
+    except (OSError, ValueError):
+        return
+    for name in names:
+        if os.path.exists(os.path.join(ws, "Memory", name,
+                                       "working-memory.md")):
+            continue
+        for rel, text in project_files(name, template).items():
+            to = os.path.join(ws, *rel.split("/"))
+            os.makedirs(os.path.dirname(to), exist_ok=True)
+            with open(to, "w", encoding="utf-8") as f:
+                f.write(text)
+
+
 def fresh_clone(src, dest):
-    """Copy what a fresh clone of src would hold into dest."""
+    """Copy what a fresh install of src would hold into dest: only the
+    files clone_list names, never the adopter's own content (bridge
+    messages, work items, memory logs, project folders), each project
+    re-scaffolded fresh. A workspace with no manifest falls back to what a
+    git clone would carry."""
+    rels = clone_list(src)
+    if rels is None:
+        return walk_clone(src, dest)
+    for rel in rels:
+        frm = os.path.join(src, *rel.split("/"))
+        if not os.path.isfile(frm) or any(fnmatch.fnmatch(
+                rel.rsplit("/", 1)[-1], p) for p in RUNTIME):
+            continue
+        to = os.path.join(dest, *rel.split("/"))
+        os.makedirs(os.path.dirname(to), exist_ok=True)
+        shutil.copy2(frm, to)
+    scaffold_projects(dest)
+
+
+def walk_clone(src, dest):
+    """Copy what a fresh git clone of src would hold into dest."""
     rules = ignore_rules()
 
     def ignored(rel, is_dir):
@@ -167,7 +233,8 @@ def board(ws, label):
     marks = set(re.findall(
         r'class="(?:dot|chip) bad"[^>]*?data-attn="([^"]*)"', page))
     bare = re.findall(r'class="(?:dot|chip) bad"(?![^>]*data-attn)', page)
-    board_filed = {i["id"] for i in items if i["key"].startswith("board:")}
+    board_filed = {i["id"] for i in items if i["key"].startswith("board:")
+                   and i["key"] not in NOTICES}
     check("board %s: every red state is filed" % label, not bare
           and marks == board_filed, (sorted(marks), sorted(ids)))
     return page, items
@@ -212,6 +279,16 @@ def projects_checks(ws):
           .endswith("mine\n"), out)
     rc, out = run(ws, np, "global")
     check("projects: a bad name is refused (exit 2)", rc == 2, out)
+    rc, out = run(ws, np, "Raised Bed Garden")
+    rbg = os.path.join(ws, "Projects", "Raised-Bed-Garden", "dashboard.json")
+    check("projects: a typed name with spaces gets a folder-safe short "
+          "name, the tab keeps the typed name", rc == 0
+          and os.path.exists(rbg) and json.load(open(
+              rbg, encoding="utf-8")).get("title") == "Raised Bed Garden"
+          and "Raised-Bed-Garden" in json.load(open(
+              ten, encoding="utf-8"))["tenants"]
+          and os.path.isdir(os.path.join(ws, "Agent Bridge",
+                                         "to-Raised-Bed-Garden")), out)
 
     json.dump([{"crop": "beans", "kg": 3}, {"crop": "kale", "kg": 1}],
               open(os.path.join(pa, "harvest.json"), "w"))
@@ -264,6 +341,8 @@ def projects_checks(ws):
           tab[-2000:])
     beta = page.split('id="page-p-smoke-beta"', 1)[-1].split(
         '<div class="page"', 1)[0]
+    check("projects: the tab is labelled with the typed name",
+          'href="#p-Raised-Bed-Garden">Raised Bed Garden<' in page)
     check("projects: a broken dashboard.json is a banner, not a traceback",
           'class="banner"' in beta and "not valid JSON" in beta, beta[:500])
     check("projects: work stays out of other tabs, global lists it",
@@ -528,8 +607,8 @@ def doctor_checks(tmp):
     if os.path.exists(kit_tp):
         shutil.copy2(kit_tp, os.path.join(dws, *PROJECT_TEMPLATE.split("/")))
     ans_p = os.path.join(dws, "Setup", "answers.json")
-    json.dump({"schema": 1, "workspace": dws, "timezone": "UTC",
-               "account_slot_chars": 0}, open(ans_p, "w", encoding="utf-8"))
+    json.dump({"schema": 1, "workspace": dws, "account_slot_chars": 0},
+              open(ans_p, "w", encoding="utf-8"))
     open(os.path.join(dws, "VERSION"), "w").write("9.9.9\n")
     cfgp = os.path.join(dws, "workspace.json")
     cfg_text = open(cfgp, encoding="utf-8").read()
@@ -554,6 +633,9 @@ def doctor_checks(tmp):
           out[-1500:])
     check("doctor: tier checks pass and name what to confirm with the AI",
           "Confirm with your AI" in out and "AGENTS.md" in out)
+    check("doctor: a backup on the workspace's own disk passes, its "
+          "tradeoff named", doctor_status(out, "backup") == "PASS"
+          and "same disk as the workspace" in out, out)
     runs = open(os.path.join(dws, "Scheduled", "runs.log"),
                 encoding="utf-8").read()
     check("doctor: writes the line the board's Doctor chip reads",
@@ -607,7 +689,25 @@ def doctor_checks(tmp):
           doctor_status(out, "backup") == "PASS"
           and "restore drill passed %s" % stamp[:10] in out, out)
 
-    # Break 5: an installation from before the rule tiers.
+    # Break 5: backups recorded as none.
+    cfg["backup"].update(daily_dest=None, weekly_dest=None)
+    open(cfgp, "w", encoding="utf-8").write(json.dumps(cfg, indent=2))
+    rc, out = run(dws, doc, "--no-smoke")
+    check("doctor: no backups is one backup WARN, not a FAIL, exit 3",
+          rc == 3 and doctor_status(out, "backup") == "WARN"
+          and "no destination is set" in out, out)
+    open(cfgp, "w", encoding="utf-8").write(good_cfg)
+
+    # Break 6: a byte-order mark on AGENTS.md.
+    raw = open(agents_p, "rb").read()
+    open(agents_p, "wb").write(b"\xef\xbb\xbf" + raw)
+    rc, out = run(dws, doc, "--no-smoke")
+    check("doctor: a byte-order mark on AGENTS.md is a rules WARN naming it",
+          rc == 3 and doctor_status(out, "workspace rules") == "WARN"
+          and "AGENTS.md starts with a byte-order mark" in out, out)
+    open(agents_p, "wb").write(raw)
+
+    # Break 7: an installation from before the rule tiers.
     open(agents_p, "w", encoding="utf-8").write(agents.split(MARK_BEGIN)[0])
     os.remove(ans_p)
     rc, out = run(dws, doc, "--no-smoke")
@@ -638,6 +738,13 @@ def procedures(ws):
                 missing.append(fn)
     check("procedures: every file indexed with all its triggers",
           not missing, missing)
+    unsourced = [c for fn in sorted(os.listdir(skills)) if fn.endswith(".md")
+                 for c in re.findall(r"`[^`]*attention\.py --file[^`]*`",
+                                     open(os.path.join(skills, fn),
+                                          encoding="utf-8").read())
+                 if "--source" not in c]
+    check("procedures: every waiting-on-you filing names its source",
+          not unsourced, unsourced)
     probe = os.path.join(skills, "smoke-probe-SKILL.md")
     open(probe, "w", encoding="utf-8").write(
         '---\nname: smoke-probe\ndescription: Smoke probe.\ntriggers:\n'
@@ -690,6 +797,10 @@ def main():
           and not os.path.exists(os.path.join(ws, "attention.json")))
 
     # --- Board, fresh install: every section in its empty state -----
+    cfgp = os.path.join(ws, "workspace.json")
+    cfg = json.load(open(cfgp, encoding="utf-8"))
+    cfg["backup"].update(daily_dest=None, weekly_dest=None)
+    json.dump(cfg, open(cfgp, "w", encoding="utf-8"), indent=2)
     page, items = board(ws, "empty")
     check("board empty: empty states render", all(s in page for s in (
         "Doctor <b>never run</b>", "Search index never built", "0 unread",
@@ -699,6 +810,13 @@ def main():
           and all(re.search(r"%s</td>\s*<td>never run" % re.escape(
               t.replace("-", " ").capitalize()), page) for t in shipped),
           shipped)
+    again = board(ws, "rebuilt")[1]
+    check("board empty: no backups is amber and filed once, never red",
+          re.search(r'dot warn"></span>Destination</div><div class="r">none '
+                    r'set\. Filed as A-\d+\.', page)
+          and [i["key"] for i in again].count("board:backup:none") == 1
+          and all(i["source"] == "dashboard" for i in again
+                  if i["key"] == "board:backup:none"), again)
 
     # --- Attention queue: idempotent filing, clear, urgent first ----
     att = os.path.join("Maintenance", "attention.py")
@@ -745,6 +863,11 @@ def main():
 
     # --- Work items: complete the example item ----------------------
     spec = os.path.join(ws, "Work Items", "WI-01_example-item.md")
+    if not os.path.exists(spec):    # an installed workspace's specs are its own
+        with open(spec, "w", encoding="utf-8") as f:
+            f.write("project: global\nname: example item\n\n# WI-01 - "
+                    "example\n\n| Field | Value |\n|---|---|\n| Status | "
+                    "OPEN |\n")
     with open(spec, "a", encoding="utf-8") as f:
         f.write("\noutcome: smoke test completion\n")
     os.makedirs(os.path.join(ws, "Work Items", "completed"), exist_ok=True)
@@ -829,6 +952,9 @@ def main():
         "oldest 5 days", "smoke run landed", "Doctor <b>PASS</b>",
         "Kit <b>v9.9.9</b>", "Search index rebuilt", "Weekly",
         "Plain later item.")), page[-4000:])
+    check("board populated: a backup destination clears the no-backups "
+          "filing", not any(i["key"] == "board:backup:none" for i in items),
+          items)
     check("board populated: urgent renders first",
           0 < page.find("Urgent item.") < page.find("Plain later item."))
     check("board populated: work states from Run, Status and Depends on",

@@ -3,6 +3,20 @@
 What changed in each version, newest first. One entry per version, short
 on purpose; the commit history has the detail.
 
+## 0.9.4 (2026-09-30)
+
+- Fixes from the first clean-machine install test. A fresh install no
+  longer holds its own files back as .fieldbook-new copies, and the health
+  check no longer turns red once the workspace is in use.
+- The time zone is now always the computer's own: setup shows it to
+  confirm, and if it is wrong you change it in the computer's settings.
+- Project names can be typed freely ("Raised Bed Garden"); folders use a
+  safe short form and the dashboard shows the name as typed.
+- Scheduled jobs no longer pause waiting for input. Choosing no backups is
+  a warning shown once, and a backup folder on the same disk is allowed,
+  with its tradeoff named. upgrade.py takes --dry-run like install.py, and
+  the health check warns about a byte-order mark in the rule files.
+
 ## 0.9.3 (2026-09-30)
 
 - Added this changelog. Every new version now needs an entry here before

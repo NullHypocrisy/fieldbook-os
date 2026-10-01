@@ -3,8 +3,9 @@
 Run from the newer kit, beside install.py. Standard library only.
 
 Usage:
-  python upgrade.py --workspace DIR            preview: print every planned
-                                               action, write nothing
+  python upgrade.py --workspace DIR [--dry-run]  preview: print every
+                                               planned action, write nothing
+                                               (--dry-run as in install.py)
   python upgrade.py --workspace DIR --apply    do it
 
 What it reads: the workspace's VERSION (the installed kit version), its
@@ -137,7 +138,7 @@ class Upgrade:
             raise Broken("no readable Setup/answers.json (format 1); the "
                          "upgrade reads the install's answers and never "
                          "re-asks them")
-        self.ans = ans
+        self.ans = install.drop_retired(ans)
         asked = set(ans.get("_about") or {}) | set(ans)
         self.questions = [k for k in install.ANSWERS_ABOUT if k not in asked]
         self.oldman = load_json(os.path.join(
@@ -360,7 +361,10 @@ class Upgrade:
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--workspace", required=True)
-    ap.add_argument("--apply", action="store_true")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true")
+    mode.add_argument("--dry-run", action="store_true",
+                      help="preview (the default; install.py's flag)")
     a = ap.parse_args(argv)
     try:
         if not shutil.which("git"):

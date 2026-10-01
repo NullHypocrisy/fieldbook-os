@@ -1,7 +1,9 @@
 # Projects
 
 A project is one area of work with its own rules, memory, inbox and
-dashboard tab, all under one short name (letters, digits, `-` and `_`):
+dashboard tab, all under one short name (letters, digits, `-` and `_`),
+made from the name as typed ("Raised Bed Garden" becomes
+`Raised-Bed-Garden`); the tab shows the typed name:
 
 - `Memory/NAME/` and its entry in `Memory/tenants.json`: working memory.
 - `Projects/NAME/PROJECT.md`: the project's rules, read after `AGENTS.md`.

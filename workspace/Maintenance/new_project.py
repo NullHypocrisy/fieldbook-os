@@ -5,6 +5,9 @@ Projects/README.md owns the folder shape and the tab format.
 
 Never overwrites: a piece that already exists is kept and reported.
 
+NAME is free text ("Raised Bed Garden"): the folders, tenant and inbox use
+its short name (workspace_common.project_slug), the tab shows it as typed.
+
 Usage:  python Maintenance/new_project.py NAME [--dry-run]
 Exit codes (tools/EXIT-CODES.md): 0 created (or planned, with --dry-run);
 1 crashed; 2 broken (bad name, no rules template, tenants.json unreadable
@@ -15,13 +18,12 @@ or unwritable); 3 held: some or all of it already existed, kept as is
 import argparse
 import json
 import os
-import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..")))
-from workspace_common import (PROJECT_NAME, PROJECT_TEMPLATE,  # noqa: E402
-                              project_files, project_tenant, workspace_root)
+from workspace_common import (PROJECT_TEMPLATE, project_files,  # noqa: E402
+                              project_slugs, project_tenant, workspace_root)
 
 ROOT = workspace_root(HERE)
 TENANTS = os.path.join(ROOT, "Memory", "tenants.json")
@@ -43,11 +45,15 @@ def main():
     ap.add_argument("name")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
-    name, dry = a.name, a.dry_run
-    if not re.match(PROJECT_NAME, name) or name == "global":
-        print("BROKEN project name %r: letters, digits, - and _ only, "
-              "starting with a letter or digit, and not 'global'" % name)
+    dry = a.dry_run
+    try:
+        (title, name), = project_slugs([a.name])
+    except ValueError as e:
+        print("BROKEN %s" % e)
         return 2
+    if name != title:
+        print("project %r uses the short name %s for its folders; the tab "
+              "shows %r" % (title, name, title))
     template = template_text()
     if template is None:
         print("BROKEN no rules template at %s; rerun install.py or copy the "
@@ -77,7 +83,7 @@ def main():
             except OSError as e:
                 print("BROKEN cannot write Memory/tenants.json (%s)" % e)
                 return 2
-    for rel, text in sorted(project_files(name, template).items()):
+    for rel, text in sorted(project_files(name, template, title).items()):
         p = os.path.join(ROOT, *rel.split("/"))
         if os.path.exists(p):
             kept.append(rel)

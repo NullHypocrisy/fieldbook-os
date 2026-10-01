@@ -66,7 +66,7 @@ that changes something, and ask the user to refresh the page.
 
 6. **Waiting on you.** Explain that anything needing their decision, from a
    session or an overnight job, lands in one queue. File a sample:
-   `python Maintenance/attention.py --file "Tour sample: nothing to do" --key tour-sample`.
+   `python Maintenance/attention.py --file "Tour sample: nothing to do" --source tour --key tour-sample`.
    Show it on the board, then clear it with `--clear` and the id it printed.
 
 7. **Messages between projects.** Explain the bridge: projects never write

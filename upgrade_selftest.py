@@ -3,7 +3,8 @@
 Copies the kit twice into a temp folder: version A as it stands, and a
 synthesized version B (minor version bumped; one README changed per system
 tested, the AGENTS.md template changed, a file added, a file retired, a new
-installer question). Installs A, then asserts: preview writes nothing; an
+installer question). Installs A, then asserts: preview (by default or
+--dry-run) writes nothing; an
 unanswered new question is reported and blocks --apply; an unmodified tree
 upgrades with zero sidecars (replace, add, retire, placed rules kept,
 VERSION bumped, report, day-log line, commits before and after); a rerun
@@ -154,6 +155,10 @@ def main():
               "add %s" % ADDED, "retire %s" % RETIRED, "VERSION %s -> %s"
               % (va, vb))) and "sidecar" not in out, out)
     check("preview: writes nothing", tree(ws) == snap and head(ws) == h0)
+    rc, out = py(up_b, "--workspace", ws, "--dry-run")
+    check("preview: --dry-run, as in install.py, previews and writes "
+          "nothing", rc == 0 and "PREVIEW" in out and tree(ws) == snap
+          and head(ws) == h0, out)
 
     rc, out = py(up_b, "--workspace", ws, "--apply")
     log = commits(ws)
@@ -176,7 +181,7 @@ def main():
           read(os.path.join(ws, "VERSION")) == read(os.path.join(kb,
                                                                  "VERSION"))
           and ans.get("newq") == "answered" and "newq" in ans["_about"]
-          and ans["timezone"] == "Europe/Berlin")
+          and ans.get("projects") == ["alpha"])
     check("apply clean: git commits bracket the run, tree clean",
           log[0] == "Fieldbook OS upgrade %s -> %s" % (va, vb) and
           log[1] == "Fieldbook OS upgrade %s -> %s: before" % (va, vb) and

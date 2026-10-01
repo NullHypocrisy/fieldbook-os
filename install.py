@@ -6,8 +6,8 @@ Supported on Windows; elsewhere it runs best-effort.
 
 Usage (from the kit root, beside this file):
   python install.py --check
-      Prerequisites as JSON on stdout. The AI reads it out and offers fixes;
-      this script only reports.
+      Prerequisites as JSON on stdout, the machine's time zone among them.
+      The AI reads it out and offers fixes; this script only reports.
   python install.py --answers FILE [--dry-run] [--stop-after PHASE]
                     [--no-register]
       Install into the answers' "workspace" folder.
@@ -29,7 +29,15 @@ rerun. A rerun with every phase done changes nothing and says so.
 
 Never overwrite: where a file already exists with other content, the kit's
 version is written beside it as NAME.fieldbook-new and listed in
-Setup/install-report.md; the adopter and their AI merge it.
+Setup/install-report.md; the adopter and their AI merge it. A file the
+installer itself wrote (it still hashes to its Setup/hashes.json entry) is
+the installer's own and is replaced.
+
+Time zone: never an answer. The workspace's zone is the machine's, read
+from the OS (Windows: tzutil /g; elsewhere the /etc/localtime link);
+--check shows it for the user to confirm, and a wrong one is fixed in the
+machine's own settings by the user, then read again. Unreadable stops the
+install (exit 2).
 
 Setup/hashes.json records the sha256 of every file outside Setup/ as the
 installer left it (sidecars excluded), so upgrade.py can tell a file the
@@ -43,7 +51,9 @@ Scheduled tasks: every folder under the kit's workspace/Scheduled/ holding
 INSTRUCTIONS.md is a task. Its schedule.json reads
   {"schedule": "DAILY" | "WEEKLY", "day": "SUN", "time": "HH:MM"}
 ("day" only for WEEKLY). answers scheduler.times.<task> overrides the time.
-A task without schedule.json is reported, not wired.
+A task without schedule.json is reported, not wired. Each wired task runs
+Scheduled/<task>/launch.cmd: the recorded launch command with " < NUL"
+appended, so a headless AI never waits for input.
 
 Exit codes:
   0  done, stopped as asked, or nothing to do (the printed word says which)
@@ -69,8 +79,8 @@ KIT = os.path.dirname(os.path.abspath(__file__))
 KIT_WS = os.path.join(KIT, "workspace")
 sys.path.insert(0, KIT_WS)
 from workspace_common import (BOARD_THEMES, MANIFEST, MARK_BEGIN,  # noqa
-                              MARK_END, PROJECT_NAME, PROJECT_TEMPLATE, git,
-                              git_identity, manifest_text, project_files,
+                              MARK_END, PROJECT_TEMPLATE, git, git_identity,
+                              manifest_text, project_files, project_slugs,
                               project_tenant)
 
 PHASES = ["workspace", "systems", "config", "rules", "scheduler", "stamp"]
@@ -85,18 +95,20 @@ TASK_PREFIX = "Fieldbook OS"
 ANSWERS_ABOUT = {
     "schema": "Answers format version; this file is format 1.",
     "workspace": "Absolute path of the workspace folder to build.",
-    "timezone": "The adopter's time zone as they name it, e.g. "
-                "Europe/Berlin; placed into the account tier.",
     "account_slot_chars": "Character limit of the tool's account-level "
                           "instructions slot; 0 means the tool has none.",
     "working_style": "Per default item (Decisions, Answers, ...): 'keep', "
                      "'drop', or the adopter's replacement text. A missing "
                      "item is kept.",
-    "projects": "Project names, each getting its own memory tenant, "
-                "Projects/<name>/ folder and bridge inbox. Empty keeps the "
-                "kit's example-project tenant.",
+    "projects": "Project names as the adopter types them, each getting its "
+                "own memory tenant, Projects/<short name>/ folder and "
+                "bridge inbox; the short name is the typed name made "
+                "folder-safe, and the dashboard tab shows the typed name. "
+                "Empty keeps the kit's example-project tenant.",
     "backup": "daily_dest / weekly_dest: backup folders outside the "
-              "workspace, or null for none.",
+              "workspace, or null for none. A folder on the workspace's "
+              "own disk is allowed but does not survive that disk "
+              "failing.",
     "scheduler": "kind: 'windows' or 'none'. launch_command (windows): the "
                  "command that starts a file-capable AI session; {task}, "
                  "{instructions} and {workspace} are filled in. times: "
@@ -108,7 +120,9 @@ ANSWERS_ABOUT = {
                    "first. Written to workspace.json board.theme."
                    % ", ".join(BOARD_THEMES),
 }
-ANSWER_KEYS = set(ANSWERS_ABOUT) | {"_about"}
+# Keys older kits asked that are still accepted and then ignored.
+RETIRED_ANSWERS = {"timezone": "the time zone is the machine's"}
+ANSWER_KEYS = set(ANSWERS_ABOUT) | {"_about"} | set(RETIRED_ANSWERS)
 
 
 class Broken(Exception):
@@ -139,6 +153,21 @@ def kit_files(skip_example=False):
 
 
 # ---------------------------------------------------------------- checks
+
+def machine_zone():
+    """The machine's time zone name as its OS shows it, or None when it
+    cannot be read. Read only: nothing here ever changes it."""
+    if platform.system() == "Windows":
+        try:
+            r = subprocess.run(["tzutil", "/g"], capture_output=True,
+                               text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        zone = r.stdout.strip()
+        return zone if r.returncode == 0 and zone else None
+    m = re.search(r"zoneinfo/(.+)$", os.path.realpath("/etc/localtime"))
+    return m.group(1) if m else None
+
 
 def check_prereqs():
     py_ok = sys.version_info >= (3, 10)
@@ -171,6 +200,19 @@ def check_prereqs():
     res["os"] = {"ok": True, "name": platform.system(),
                  "supported": platform.system() == "Windows",
                  "detail": "Windows is supported; elsewhere best-effort"}
+    zone = machine_zone()
+    res["timezone"] = {"ok": bool(zone), "zone": zone or "UNKNOWN",
+                       "detail": "the machine's time zone, used for every "
+                       "time in the workspace; show it to the user to "
+                       "confirm"}
+    if not zone:
+        res["timezone"]["fix"] = ("the machine's time zone could not be "
+                                  "read; the user checks it in the system "
+                                  "settings, then rerun --check")
+    else:
+        res["timezone"]["fix_if_wrong"] = (
+            "the user changes the machine's time zone in its own settings "
+            "(the AI never does), then rerun --check")
     res["ok"] = all(v["ok"] for v in res.values() if isinstance(v, dict))
     return res
 
@@ -192,8 +234,6 @@ def validate(ans):
             inside = False
         if inside:
             errs.append("workspace must be outside the kit folder")
-    if not ans.get("timezone"):
-        errs.append("timezone is required")
     slot = ans.get("account_slot_chars", 0)
     if not isinstance(slot, int) or slot < 0:
         errs.append("account_slot_chars must be a whole number >= 0")
@@ -201,10 +241,10 @@ def validate(ans):
     for k in ans.get("working_style", {}) or {}:
         if k not in items:
             errs.append("working_style item %r is not one of %s" % (k, items))
-    for p in ans.get("projects", []) or []:
-        if not re.match(PROJECT_NAME, str(p)) or p == "global":
-            errs.append("project name %r: letters, digits, - and _ only "
-                        "(and not 'global')" % p)
+    try:
+        project_slugs(ans.get("projects", []) or [])
+    except ValueError as e:
+        errs.append(str(e))
     sch = ans.get("scheduler") or {"kind": "none"}
     if ans.get("board_theme", BOARD_THEMES[0]) not in BOARD_THEMES:
         errs.append("board_theme must be one of " + ", ".join(BOARD_THEMES))
@@ -220,7 +260,16 @@ def validate(ans):
 
 
 def comparable(ans):
-    return {k: v for k, v in ans.items() if k != "_about"}
+    return {k: v for k, v in ans.items()
+            if k != "_about" and k not in RETIRED_ANSWERS}
+
+
+def drop_retired(ans):
+    """Remove answers this kit no longer reads, one printed line each."""
+    for k, why in RETIRED_ANSWERS.items():
+        if k in ans:
+            print("IGNORED answer %s (%r): %s" % (k, ans.pop(k), why))
+    return ans
 
 
 def saved_answers_text(ans):
@@ -255,16 +304,17 @@ def style_header():
     return next(l for l in body.splitlines() if l.strip())
 
 
-def placed_texts(ans):
+def placed_texts(ans, zone):
     """Return (slot_text or None, agents_block or None, where-note).
 
+    zone: the machine's time zone (machine_zone()), filling {TIMEZONE}.
     B-2 placement: principles are written to fit a small slot; the working
     style joins them in the slot when both fit, else goes to AGENTS.md. No
     slot, or a slot too small for the principles: both go to AGENTS.md.
     """
     principles = read_kit(os.path.join("tiers", "account.md")).strip()
     principles = principles.replace("{WORKSPACE}", ans["workspace"]) \
-                           .replace("{TIMEZONE}", ans["timezone"])
+                           .replace("{TIMEZONE}", zone)
     choices = ans.get("working_style") or {}
     lines = [style_header()]
     for label, line in style_items():
@@ -299,11 +349,16 @@ def agents_with_block(template, block):
 # ---------------------------------------------------------- the installer
 
 class Installer:
-    def __init__(self, ans, dry, register):
+    def __init__(self, ans, dry, register, zone=None):
         self.ans = ans
         self.ws = os.path.abspath(ans["workspace"])
         self.dry = dry
         self.register = register
+        self.zone = zone or machine_zone()
+        if not self.zone:
+            raise Broken("the machine's time zone is UNKNOWN (it could not "
+                         "be read); the user checks it in the system "
+                         "settings, then rerun")
         self.touched = []       # workspace-relative paths written this phase
         self.held = []          # report lines needing the adopter
         self.report = []
@@ -324,8 +379,10 @@ class Installer:
     def put(self, rel, data, replace_if=()):
         """Write bytes at rel unless it holds other content: then sidecar.
 
-        replace_if: contents the installer itself wrote earlier that may be
-        replaced (a template it placed, now being filled in).
+        The installer's own files are replaced: one that still hashes to
+        what the installer recorded for it in Setup/hashes.json (this run
+        or an earlier one), and any of replace_if (contents it wrote
+        earlier, e.g. a template now being filled in).
         """
         if isinstance(data, str):
             data = data.encode("utf-8")
@@ -339,7 +396,9 @@ class Installer:
             return
         ok = [r.encode("utf-8") if isinstance(r, str) else r
               for r in replace_if]
-        if cur is not None and cur not in ok:
+        owned = cur is not None and self.hashes.get(
+            rel.replace("\\", "/")) == sha(cur)
+        if cur is not None and cur not in ok and not owned:
             side = path + SIDECAR
             if os.path.exists(side):
                 with open(side, "rb") as f:
@@ -523,16 +582,21 @@ class Installer:
                                          "tenants.json"))
         ten = json.loads(tmpl_ten)
         ten["tenants"].pop("example-project")
-        for p in projects:
+        for title, p in project_slugs(projects):
             ten["tenants"][p] = project_tenant(p)
-            for rel, text in sorted(project_files(p, template).items()):
+            if p != title:
+                self.report.append("- project %r: folders use the short "
+                                   "name %s" % (title, p))
+            for rel, text in sorted(project_files(p, template,
+                                                  title).items()):
                 self.put(rel, text)
         self.put("Memory/tenants.json", json.dumps(ten, indent=2) + "\n",
                  replace_if=[tmpl_ten])
 
     def phase_rules(self):
-        slot, block, where = placed_texts(self.ans)
+        slot, block, where = placed_texts(self.ans, self.zone)
         self.report.append("- placement: " + where)
+        self.report.append("- time zone: %s (the machine's)" % self.zone)
         tmpl = read_kit(os.path.join("workspace", "AGENTS.md"))
         self.put("AGENTS.md", agents_with_block(tmpl, block),
                  replace_if=[tmpl])
@@ -586,7 +650,7 @@ class Installer:
             cmd = sch["launch_command"].format(
                 task=t, instructions=instr, workspace=self.ws)
             launch = "Scheduled/%s/launch.cmd" % t
-            self.put(launch, '@echo off\r\ncd /d "%s"\r\n%s\r\n'
+            self.put(launch, '@echo off\r\ncd /d "%s"\r\n%s < NUL\r\n'
                      % (self.ws, cmd))
             argv = ["schtasks", "/Create", "/TN", "%s\\%s" % (TASK_PREFIX, t),
                     "/TR", '"%s"' % os.path.join(self.ws, launch),
@@ -702,7 +766,9 @@ def main(argv=None):
             with open(saved, encoding="utf-8-sig") as f:
                 ans = json.load(f)
             validate(ans)
-        rc = Installer(ans, a.dry_run, not a.no_register).run(a.stop_after)
+        drop_retired(ans)
+        rc = Installer(ans, a.dry_run, not a.no_register,
+                       pre["timezone"]["zone"]).run(a.stop_after)
         return max(rc, code) if rc in (0, 3) else rc
     except Broken as e:
         print("BROKEN: %s" % e)

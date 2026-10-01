@@ -14,8 +14,10 @@ installed kit version. Each tab's selector dot shows its worst state.
 Marking principle: every not-desired state is marked - amber (warn) when
 drifting, red (bad) when it needs the user's hand - and every red state is
 ALSO filed to the attention queue under a "board:" key, so nothing
-off-nominal appears without being pointed out. A board-filed item whose
-state has gone back to normal is cleared by the next build.
+off-nominal appears without being pointed out. One amber state is filed
+the same way, once: no backup destination set (a choice the user may have
+made on purpose, so it is not red). A board-filed item whose state has
+gone back to normal is cleared by the next build.
 
 Scheduled pieces, the doctor and restore drills are read from the run log,
 Scheduled/runs.log, one line per run:
@@ -337,6 +339,7 @@ def render_file(path, mode):
 class Board:
     def __init__(self):
         self.reds = {}          # key -> (text, urgent)
+        self.notices = {}       # amber states also filed, same shape
         self.kinds = []         # states marked in the tile being built
         self.runs = run_log()
         self.pages = []         # drill-down pages
@@ -739,10 +742,14 @@ class Board:
     def backups_tail(self, out, cfg, dests):
         if not cfg.get("daily_dest") and not cfg.get("weekly_dest"):
             k = "backup:none"
-            d = self.dot("bad", k, "No backup destination is set - set "
-                         "daily_dest or weekly_dest in workspace.json.")
+            self.notices[k] = (
+                "No backups: no destination is set. When you can, set "
+                "daily_dest or weekly_dest in workspace.json to another "
+                "drive or a synced cloud folder (this disk works too, but "
+                "does not survive the disk failing).", False)
             out.append('<div class="row"><div>%sDestination</div><div '
-                       'class="r">none set.%s</div></div>' % (d, self.filed(k)))
+                       'class="r">none set.%s</div></div>'
+                       % (self.dot("warn"), self.filed(k)))
         for dest in sorted(set(dests)):
             u = shutil.disk_usage(dest)
             pct = int(100 * u.used / u.total) if u.total else 0
@@ -1324,9 +1331,11 @@ def build(out_path):
              for pid, label, fn in sections if fn}
     tabs = [b.project_tab(n) for n in projects()]
 
-    # File every red state, then clear board-filed items now back to normal.
+    # File every red state and notice, then clear board-filed items now back
+    # to normal.
     ids = {}
-    for k, (text, urgent) in b.reds.items():
+    filings = dict(b.notices, **b.reds)
+    for k, (text, urgent) in filings.items():
         ids[k] = attention.file_item(text, urgent, "dashboard",
                                      "board:" + k) or "not filed"
     try:
@@ -1335,7 +1344,7 @@ def build(out_path):
         q = {"items": []}
     for it in q["items"]:
         key = str(it.get("key", ""))
-        if key.startswith("board:") and key[6:] not in b.reds:
+        if key.startswith("board:") and key[6:] not in filings:
             attention.clear(it["id"])
     try:
         items = attention.ordered(attention.load()["items"])

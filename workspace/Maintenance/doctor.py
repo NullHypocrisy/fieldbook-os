@@ -6,15 +6,19 @@ them, and it changes nothing except its own run-log line.
 
   tree             every file in Setup/manifest.json is present (format:
                    workspace_common.py); no unmerged .fieldbook-new sidecar
-  workspace rules  AGENTS.md present and carrying what the installer placed
+  workspace rules  AGENTS.md present and carrying what the installer placed;
+                   no rule file starting with a byte-order mark, which can
+                   break CLAUDE.md's @AGENTS.md import
   account tier     the account-level text ready (Setup/account-slot.txt) or
                    the no-slot fallback in AGENTS.md; no script can read an
                    AI tool's settings, so it prints what to confirm with it
   answers          Setup/answers.json present and parseable
   version          VERSION present, line 1 major.minor.patch
   scheduled        each scheduled piece's last run, or "never run"
-  backup           a destination set, reachable, and fresh; the last restore
-                   drill passed (never run is no verdict)
+  backup           a destination set (none is a WARN), reachable, and fresh;
+                   one on the workspace's own disk passes, its tradeoff
+                   named; the last restore drill passed (never run is no
+                   verdict)
   git              the workspace is its own git repository, with history
   smoke            Maintenance/smoke_test.py passes (it works in a copy)
   dashboard        the board builds from a copy of this workspace, and the
@@ -54,7 +58,8 @@ RANK = {"PASS": 0, "WARN": 1, "FAIL": 2}
 RESULTS = []    # (name, status, detail, fix)
 CONFIRM = []
 PLACE_FIX = ("place the rule tiers: paste the kit's tiers/account.md "
-             "({WORKSPACE} and {TIMEZONE} filled in) into your AI tool's "
+             "({WORKSPACE} filled in, {TIMEZONE} with this machine's time "
+             "zone) into your AI tool's "
              "account-level instructions and the kept lines of "
              "tiers/working-style.md into AGENTS.md between the lines "
              "%s and %s; a tool with no account-level slot takes both in "
@@ -146,7 +151,30 @@ def check_tree():
     return worst(found)
 
 
+RULE_FILES = ("AGENTS.md", "CLAUDE.md", "Setup/account-slot.txt")
+
+
 def check_workspace_rules():
+    res = workspace_rules()
+    boms = []
+    for rel in RULE_FILES:
+        try:
+            with open(path(rel), "rb") as f:
+                if f.read(3) == b"\xef\xbb\xbf":
+                    boms.append(rel)
+        except OSError:
+            pass
+    if not boms or res[0] == "FAIL":
+        return res
+    return ("WARN", "%s start%s with a byte-order mark, which can break the "
+            "@AGENTS.md import%s" % (", ".join(boms), "s" if len(boms) == 1
+                                     else "", "; " + res[1] if res[0] ==
+                                     "WARN" else ""),
+            "save %s as UTF-8 without a byte-order mark%s" % (
+                " and ".join(boms), " / " + res[2] if res[2] else ""))
+
+
+def workspace_rules():
     if not os.path.exists(path("AGENTS.md")):
         return ("FAIL", "AGENTS.md is missing, so sessions start without "
                 "the workspace rules", "restore it: git checkout -- "
@@ -287,6 +315,14 @@ def check_scheduled():
     return (status, detail, fix)
 
 
+def same_disk(dest):
+    """True when the backup destination sits on the workspace's own disk."""
+    try:
+        return os.stat(dest).st_dev == os.stat(ROOT).st_dev
+    except OSError:
+        return False
+
+
 def check_backup():
     try:
         cfg = json.loads(read(path("workspace.json"))).get("backup", {})
@@ -295,8 +331,11 @@ def check_backup():
                 "restore it: git checkout -- workspace.json")
     tiers = [t for t in ("daily", "weekly") if cfg.get(t + "_dest")]
     if not tiers:
-        return ("FAIL", "no backup destination is set",
-                "set daily_dest or weekly_dest in workspace.json")
+        return ("WARN", "no backups: no destination is set (the board "
+                "files this once to waiting-on-you)", "set daily_dest or "
+                "weekly_dest in workspace.json to a folder outside the "
+                "workspace: another drive or a synced cloud folder, or "
+                "this disk if nothing else is available")
     runs = board.backup_runs()
     found = []
     for t in tiers:
@@ -324,8 +363,10 @@ def check_backup():
                     "Maintenance/backup.py --tier %s and check its "
                     "schedule" % t))
             else:
-                found.append(("PASS", "%s: last %s" % (
-                    t, snap[0].strftime("%Y-%m-%d")), None))
+                found.append(("PASS", "%s: last %s%s" % (
+                    t, snap[0].strftime("%Y-%m-%d"), " (same disk as the "
+                    "workspace: it does not survive that disk failing)"
+                    if same_disk(dest) else ""), None))
     import restore_drill  # same folder; the board reads the drill the same way
     drill = board.run_log().get(restore_drill.TASK)
     if not drill:
