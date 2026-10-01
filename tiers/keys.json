@@ -1,0 +1,18 @@
+{
+  "_about": "Known rule keys per tier file, read by the workspace's doctor (rule keys check). A key is the label a rule line starts with: account.md '1. Key: ...', working-style.md '- Key: ...', project.md '## Key'. renamed maps an old key to its current one, so a hand-edited file still using the old key gets a warning naming the new one. A 1.x release renames a key by adding it here, never by removing the old name silently. install.py copies this file to Setup/rule-keys.json.",
+  "account": {
+    "keys": ["Start", "Where rules live", "Truth", "Record once", "Dates",
+             "Secrets", "Intent"],
+    "renamed": {}
+  },
+  "working-style": {
+    "keys": ["Decisions", "Reach", "Answers", "Clarify first", "Pushback",
+             "Closing", "Waiting on me", "Suggestions", "Rule changes"],
+    "renamed": {}
+  },
+  "project": {
+    "keys": ["What this project is", "Where its things live",
+             "Rules for this project"],
+    "renamed": {}
+  }
+}

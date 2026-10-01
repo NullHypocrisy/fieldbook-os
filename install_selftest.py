@@ -58,7 +58,8 @@ def commits(ws):
 def answers(tmp, name, ws, **over):
     a = {"workspace": ws, "account_slot_chars": 1500, "projects": ["alpha"],
          "working_style": {"Suggestions": "drop"},
-         "backup": {"weekly_dest": os.path.join(tmp, name + "-bk")},
+         "backup": {"weekly_dest": os.path.join(tmp, name + "-bk"),
+                    "encrypted": True},
          "scheduler": {"kind": "none"}}
     a.update(over)
     p = os.path.join(tmp, name + ".json")
@@ -100,7 +101,8 @@ def report_checks(ws):
     bundle = os.path.join(ws, *m.group(1).split("/")) if m else ws + "-none"
     summary = read(os.path.join(bundle, "summary.md"))
     items = ("tree", "workspace rules", "account tier", "answers", "version",
-             "scheduled", "backup", "git", "smoke", "dashboard", "journal",
+             "scheduled", "backup", "rule keys", "git", "smoke", "dashboard",
+             "journal",
              "installer state", "time zone", "leftover sidecars",
              "byte-order marks", "git history", "python", "git version",
              "AI tool", "kit version")
@@ -109,7 +111,8 @@ def report_checks(ws):
         re.M)]
     check("report on a fresh install: every item in the summary, smoke "
           "output kept, every job listed as hand-run", not missing and
-          "| smoke | PASS |" in summary and "| installer state | PASS |"
+          "| smoke | PASS |" in summary and "| rule keys | PASS |" in
+          summary and "| installer state | PASS |"
           in summary and summary.count("| run by hand, as chosen at "
                                        "setup |") >= 6 and
           "ALL CHECKS PASSED" in read(os.path.join(bundle, "smoke.txt")),
@@ -157,6 +160,15 @@ def main():
     rc, out = py(inst, "--answers", answers(tmp, "bad", "relative/path"))
     check("answers: invalid set is refused as broken (exit 2)",
           rc == 2 and "BROKEN" in out, out)
+    ws = os.path.join(tmp, "noenc")
+    rc, out = py(inst, "--answers", answers(tmp, "noenc", ws, backup={
+        "weekly_dest": os.path.join(tmp, "noenc-bk")}), "--dry-run")
+    check("answers: a backup destination without backup.encrypted is "
+          "refused, naming it (exit 2)", rc == 2 and "backup.encrypted"
+          in out and not os.path.exists(ws), out)
+    rc, out = py(inst, "--answers", answers(tmp, "nobk", ws, backup={
+        "weekly_dest": None}), "--dry-run")
+    check("answers: no destination needs no backup.encrypted", rc == 0, out)
 
     # full install, after the AI's own journal lines
     hj = os.path.join(home, HOME_JOURNAL)
@@ -214,6 +226,9 @@ def main():
     cfg = json.loads(read(os.path.join(ws, "workspace.json")))
     check("install: backup destination configured",
           cfg["backup"]["weekly_dest"] == os.path.join(tmp, "full-bk"))
+    check("install: the kit's known rule keys placed for the doctor",
+          read(os.path.join(ws, *install.RULE_KEYS.split("/"))) ==
+          read(os.path.join(KIT, "tiers", "keys.json")) != "")
     slot = os.path.join(ws, "Setup", "account-slot.txt")
     agents = read(os.path.join(ws, "AGENTS.md"))
     check("install: 1500 slot takes principles, AGENTS.md the style",

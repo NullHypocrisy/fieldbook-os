@@ -36,7 +36,8 @@ from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
 from workspace_common import (JOURNAL, MANIFEST, MARK_BEGIN,  # noqa: E402
-                              MARK_END, PROJECT_TEMPLATE, SMOKE_NESTED, git,
+                              MARK_END, PROJECT_TEMPLATE, RULE_KEYS,
+                              SMOKE_NESTED, git,
                               git_identity, manifest_text, project_files,
                               workspace_root)
 
@@ -609,8 +610,16 @@ def doctor_checks(tmp):
     kit_tp = os.path.join(SRC, "..", "tiers", "project.md")
     if os.path.exists(kit_tp):
         shutil.copy2(kit_tp, os.path.join(dws, *PROJECT_TEMPLATE.split("/")))
+    keys_src = os.path.join(SRC, "..", "tiers", "keys.json")
+    if not os.path.exists(keys_src):
+        keys_src = os.path.join(SRC, *RULE_KEYS.split("/"))
+    keys_p = os.path.join(dws, *RULE_KEYS.split("/"))
+    if os.path.exists(keys_src):
+        shutil.copy2(keys_src, keys_p)
     ans_p = os.path.join(dws, "Setup", "answers.json")
-    json.dump({"schema": 1, "workspace": dws, "account_slot_chars": 0},
+    json.dump({"schema": 1, "workspace": dws, "account_slot_chars": 0,
+               "backup": {"weekly_dest": os.path.join(tmp, "doctor-bk"),
+                          "encrypted": True}},
               open(ans_p, "w", encoding="utf-8"))
     open(os.path.join(dws, "VERSION"), "w").write("9.9.9\n")
     cfgp = os.path.join(dws, "workspace.json")
@@ -630,7 +639,7 @@ def doctor_checks(tmp):
 
     rc, out = run(dws, doc)
     names = ("tree", "workspace rules", "account tier", "answers", "version",
-             "scheduled", "backup", "git", "smoke", "dashboard")
+             "scheduled", "backup", "rule keys", "git", "smoke", "dashboard")
     check("doctor: populated install exits 0, every check PASS",
           rc == 0 and all(doctor_status(out, n) == "PASS" for n in names),
           out[-1500:])
@@ -710,6 +719,74 @@ def doctor_checks(tmp):
           rc == 3 and doctor_status(out, "workspace rules") == "WARN"
           and "AGENTS.md starts with a byte-order mark" in out, out)
     open(agents_p, "wb").write(raw)
+
+    # Break 8: backup encryption recorded false, then not recorded. The
+    # doctor WARNs and the board's backup card is amber, never filed; true
+    # (the populated run above) gives neither.
+    page_p = os.path.join(tmp, "doctor-board.html")
+
+    def enc_board():
+        run(dws, os.path.join("Maintenance", "dashboard_build.py"), "--out",
+            page_p)
+        page = open(page_p, encoding="utf-8").read() \
+            if os.path.exists(page_p) else ""
+        m = re.search(r'dot (\w+)"></span>Encryption</div><div class="r">'
+                      r'([^<]*)<', page)
+        qp = os.path.join(dws, "attention.json")
+        filed = "ncrypt" in (open(qp, encoding="utf-8").read()
+                             if os.path.exists(qp) else "")
+        return (m.groups() if m else (None, None)), filed
+    (dot, _), filed = enc_board()
+    check("board: encrypted backups recorded true are not amber",
+          dot == "ok" and not filed, dot)
+    for value, word in ((False, "not encrypted, by your recorded choice"),
+                        (None, "not recorded whether the destination is "
+                         "encrypted")):
+        ans = json.loads(good_ans)
+        if value is None:
+            ans["backup"].pop("encrypted")
+        else:
+            ans["backup"]["encrypted"] = value
+        open(ans_p, "w", encoding="utf-8").write(json.dumps(ans))
+        rc, out = run(dws, doc, "--no-smoke")
+        (dot, text), filed = enc_board()
+        label = "false" if value is False else "missing"
+        check("doctor: backup.encrypted %s is a backup WARN with its fix, "
+              "exit 3" % label, rc == 3 and doctor_status(out, "backup")
+              == "WARN" and word in out and "backup.encrypted" in out, out)
+        check("board: backup.encrypted %s marks the backup card amber, "
+              "nothing filed" % label, dot == "warn" and text == word
+              and not filed, (dot, text, filed))
+    open(ans_p, "w", encoding="utf-8").write(good_ans)
+
+    # Break 9: rule keys. An unknown key and a renamed one in the placed
+    # rules, an unknown heading in a project's rules file.
+    good_keys = open(keys_p, encoding="utf-8").read()
+    keys = json.loads(good_keys)
+    keys["working-style"]["renamed"]["Choices"] = "Decisions"
+    open(keys_p, "w", encoding="utf-8").write(json.dumps(keys))
+    placed = open(agents_p, encoding="utf-8").read()
+    open(agents_p, "w", encoding="utf-8").write(placed.replace(
+        MARK_END, "- Coffee: strong.\n- Choices: mine.\n" + MARK_END))
+    pdir = os.path.join(dws, "Projects", "smoke-keys")
+    os.makedirs(pdir, exist_ok=True)
+    open(os.path.join(pdir, "PROJECT.md"), "w", encoding="utf-8").write(
+        "# smoke-keys: project rules\n\n## What this project is\n\nx\n\n"
+        "## Notes\n\ny\n")
+    rc, out = run(dws, doc, "--no-smoke")
+    check("doctor: planted unknown and renamed rule keys are rule-keys "
+          "WARNs naming each, exit 3", rc == 3
+          and doctor_status(out, "rule keys") == "WARN"
+          and "unknown key 'Coffee'" in out
+          and "'Choices' was renamed to 'Decisions'" in out
+          and "Projects/smoke-keys/PROJECT.md: unknown key 'Notes'" in out,
+          out)
+    shutil.rmtree(pdir)
+    open(keys_p, "w", encoding="utf-8").write(good_keys)
+    open(agents_p, "w", encoding="utf-8").write(placed)
+    rc, out = run(dws, doc, "--no-smoke")
+    check("doctor: rule keys pass again once the plants are gone",
+          doctor_status(out, "rule keys") == "PASS", out)
 
     # Break 7: an installation from before the rule tiers.
     open(agents_p, "w", encoding="utf-8").write(agents.split(MARK_BEGIN)[0])
@@ -872,6 +949,21 @@ def kit_checks():
         return
     rc, out = run(kit, "release_manifest.py", "--check")
     check("kit: release manifest current for VERSION", rc == 0, out)
+    tiers = os.path.join(kit, "tiers")
+
+    def tier(name):
+        return open(os.path.join(tiers, name), encoding="utf-8").read()
+    found = {
+        "account": re.findall(r"^\d+\. ([^:\n]+): ", tier("account.md"),
+                              re.M),
+        "working-style": re.findall(r"^- ([^:\n]+): ", tier(
+            "working-style.md").split("\n---\n", 1)[1], re.M),
+        "project": re.findall(r"^## (.+?)\s*$", tier("project.md"), re.M)}
+    known = json.load(open(os.path.join(tiers, "keys.json"),
+                           encoding="utf-8"))
+    check("kit: tiers/keys.json lists exactly the keys the tier files use",
+          all(known[t]["keys"] == found[t] for t in found),
+          {t: (known[t]["keys"], found[t]) for t in found})
     rc, out = run(kit, "upgrade_selftest.py")
     check("kit: upgrade self-test passes", rc == 0
           and "ALL UPGRADE CHECKS PASSED" in out, out[-1500:])

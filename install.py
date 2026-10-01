@@ -19,7 +19,8 @@ on the workspace's history:
   workspace  create the folder, git init, save answers and .gitignore
   systems    copy the kit's workspace/ tree; list it in Setup/manifest.json
              (format: workspace_common.py), which the doctor checks
-  config     workspace.json, the project rules template, and per answered
+  config     workspace.json, the project rules template, the known rule
+             keys (Setup/rule-keys.json, from tiers/keys.json), and per answered
              project its tenant, Projects/ folder and inbox
   rules      place the account tier and working style (slot or AGENTS.md)
   scheduler  wire each task under Scheduled/ to the adopter's scheduler
@@ -84,7 +85,8 @@ KIT = os.path.dirname(os.path.abspath(__file__))
 KIT_WS = os.path.join(KIT, "workspace")
 sys.path.insert(0, KIT_WS)
 from workspace_common import (BOARD_THEMES, MANIFEST, MARK_BEGIN,  # noqa
-                              MARK_END, PROJECT_TEMPLATE, adopt_home_journal,
+                              MARK_END, PROJECT_TEMPLATE, RULE_KEYS,
+                              adopt_home_journal,
                               git, git_identity, journal, machine_zone,
                               manifest_text, project_files, project_slugs,
                               project_tenant)
@@ -114,7 +116,9 @@ ANSWERS_ABOUT = {
     "backup": "daily_dest / weekly_dest: backup folders outside the "
               "workspace, or null for none. A folder on the workspace's "
               "own disk is allowed but does not survive that disk "
-              "failing.",
+              "failing. encrypted: true if the destination is encrypted, "
+              "false to accept unencrypted backups (the doctor and the "
+              "board then mark it); required when a destination is set.",
     "scheduler": "kind: 'windows' or 'none'. launch_command (windows): the "
                  "command that starts a file-capable AI session; {task}, "
                  "{instructions} and {workspace} are filled in. times: "
@@ -236,6 +240,11 @@ def validate(ans):
         project_slugs(ans.get("projects", []) or [])
     except ValueError as e:
         errs.append(str(e))
+    bk = ans.get("backup") or {}
+    if (bk.get("daily_dest") or bk.get("weekly_dest")) and not isinstance(
+            bk.get("encrypted"), bool):
+        errs.append("backup.encrypted must be true or false when a backup "
+                    "destination is set")
     sch = ans.get("scheduler") or {"kind": "none"}
     if ans.get("board_theme", BOARD_THEMES[0]) not in BOARD_THEMES:
         errs.append("board_theme must be one of " + ", ".join(BOARD_THEMES))
@@ -567,6 +576,8 @@ class Installer:
         template = read_kit(os.path.join("tiers", "project.md"))
         self.put(PROJECT_TEMPLATE, template,
                  replace_if=[self.current(PROJECT_TEMPLATE)])
+        self.put(RULE_KEYS, read_kit(os.path.join("tiers", "keys.json")),
+                 replace_if=[self.current(RULE_KEYS)])
         projects = self.ans.get("projects") or []
         if not projects:
             return

@@ -18,8 +18,12 @@ them, and it changes nothing except its own run-log line and, with
   scheduled        each scheduled piece's last run, or "never run"
   backup           a destination set (none is a WARN), reachable, and fresh;
                    one on the workspace's own disk passes, its tradeoff
-                   named; the last restore drill passed (never run is no
-                   verdict)
+                   named; backup.encrypted recorded in the answers (false,
+                   or not recorded, is a WARN; the board marks the same);
+                   the last restore drill passed (never run is no verdict)
+  rule keys        every rule key in the placed-rules block of AGENTS.md
+                   and in each Projects/<name>/PROJECT.md is a known key
+                   (Setup/rule-keys.json); unknown or renamed is a WARN
   git              the workspace is its own git repository, with history
   smoke            Maintenance/smoke_test.py passes (it works in a copy)
   dashboard        the board builds from a copy of this workspace, and the
@@ -71,7 +75,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..")))
 sys.path.insert(0, HERE)
 from workspace_common import (JOURNAL, JOURNAL_LINE,  # noqa: E402
-                              MANIFEST, MARK_BEGIN, MARK_END, SMOKE_NESTED,
+                              MANIFEST, MARK_BEGIN, MARK_END, RULE_KEYS,
+                              SMOKE_NESTED,
                               git, home_journal, machine_zone,
                               workspace_root)
 import dashboard_build as board  # noqa: E402
@@ -391,6 +396,15 @@ def check_backup():
                     t, snap[0].strftime("%Y-%m-%d"), " (same disk as the "
                     "workspace: it does not survive that disk failing)"
                     if same_disk(dest) else ""), None))
+    enc = board.backup_encryption()
+    if enc and enc[0] != "ok":
+        found.append(("WARN", enc[1], "record the answer: set "
+                      "backup.encrypted in Setup/answers.json to true "
+                      "(the destination is encrypted) or false (you accept "
+                      "unencrypted backups)" if "not recorded" in enc[1]
+                      else "to clear it, move the backups to an encrypted "
+                      "drive or folder, then set backup.encrypted to true "
+                      "in Setup/answers.json"))
     import restore_drill  # same folder; the board reads the drill the same way
     drill = board.run_log().get(restore_drill.TASK)
     if not drill:
@@ -405,6 +419,76 @@ def check_backup():
     bad = [f for f in found if f[0] != "PASS"]
     return (worst(found)[0], "; ".join(f[1] for f in (bad or found)),
             " / ".join(f[2] for f in bad) or None)
+
+
+KEY_LINES = (("account", re.compile(r"^\d+\. ([^:\n]+): ")),
+             ("working-style", re.compile(r"^- ([^:\n]+): ")))
+PROJECT_KEY = re.compile(r"^## (.+?)\s*$")
+
+
+def rule_keys():
+    """The known-keys file (format: its _about): the installed copy, else
+    the kit's own beside the workspace. None when neither reads."""
+    for p in (path(RULE_KEYS), os.path.join(ROOT, "..", "tiers",
+                                            "keys.json")):
+        try:
+            return json.loads(read(p))
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def key_findings(where, keys, tiers, known):
+    """[(text, fix)] for each key found in where that tiers do not know."""
+    out = []
+    for k in keys:
+        if any(k in known.get(t, {}).get("keys", []) for t in tiers):
+            continue
+        new = next((known[t]["renamed"][k] for t in tiers
+                    if k in known.get(t, {}).get("renamed", {})), None)
+        if new:
+            out.append(("%s: %r was renamed to %r" % (where, k, new),
+                        "in %s, change %r to %r" % (where, k, new)))
+        else:
+            out.append(("%s: unknown key %r" % (where, k), "in %s, change "
+                        "%r to one of the known keys (%s); a rule of your "
+                        "own goes %s" % (where, k, ", ".join(
+                            k2 for t in tiers for k2 in known.get(t, {})
+                            .get("keys", [])), "under 'Rules for this "
+                            "project'" if tiers == ("project",) else
+                            "outside the placed-rules markers")))
+    return out
+
+
+def check_rule_keys():
+    known = rule_keys()
+    if known is None:
+        return ("WARN", "no known-keys list (%s), so rule keys cannot be "
+                "checked" % RULE_KEYS, "run upgrade.py from the kit, or "
+                "copy the kit's tiers/keys.json to " + RULE_KEYS)
+    found, files = [], 0
+    block = placed_block() if os.path.exists(path("AGENTS.md")) else None
+    if block:
+        files += 1
+        keys = [m.group(1).strip() for line in block.splitlines()
+                for _, rx in KEY_LINES for m in [rx.match(line)] if m]
+        found += key_findings("AGENTS.md (placed rules)", keys,
+                              ("account", "working-style"), known)
+    pdir = path("Projects")
+    for name in sorted(os.listdir(pdir)) if os.path.isdir(pdir) else []:
+        pf = os.path.join(pdir, name, "PROJECT.md")
+        if not os.path.isfile(pf):
+            continue
+        files += 1
+        keys = [m.group(1) for line in read(pf).splitlines()
+                for m in [PROJECT_KEY.match(line)] if m]
+        found += key_findings("Projects/%s/PROJECT.md" % name, keys,
+                              ("project",), known)
+    if found:
+        return ("WARN", "; ".join(f[0] for f in found),
+                " / ".join(f[1] for f in found))
+    return ("PASS", "every rule key known (%d file%s)" % (
+        files, "" if files == 1 else "s"), None)
 
 
 def check_git():
@@ -833,7 +917,7 @@ def main():
               ("account tier", check_account_tier),
               ("answers", check_answers), ("version", check_version),
               ("scheduled", check_scheduled), ("backup", check_backup),
-              ("git", check_git)]
+              ("rule keys", check_rule_keys), ("git", check_git)]
     smoke_out = [""]
 
     def smoke():

@@ -3,6 +3,20 @@
 What changed in each version, newest first. One entry per version, short
 on purpose; the commit history has the detail.
 
+## 0.9.6 (2026-09-30)
+
+- MIT license (LICENSE), a written promise of what 1.x keeps stable
+  (STABILITY.md), and SECURITY.md: what is stored in plain text, who can
+  read it, and how to report a security problem.
+- Unencrypted backups are now a recorded choice. The answers file takes
+  backup.encrypted (true or false), required when a backup destination is
+  set; false, or no answer on an older workspace, is a health-check warning
+  and an amber backups card. To act: on an existing workspace, add
+  "encrypted": true or false under "backup" in Setup/answers.json.
+- The health check warns about unknown or renamed rule keys in the placed
+  rules and each project's rules file, naming the fix. The known keys ship
+  in tiers/keys.json.
+
 ## 0.9.5 (2026-09-30)
 
 - Installs keep a journal: one line per step, started by the installing AI

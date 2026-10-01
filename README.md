@@ -62,14 +62,24 @@ Everything is stored as plain, unencrypted files: memory, the search index,
 backups, and any `.env` file holding keys. Fieldbook OS does not encrypt.
 We strongly advise putting backups on an encrypted destination (an
 encrypted drive or an encrypted cloud folder) and keeping the workspace on
-an encrypted disk. Doing that is up to you.
+an encrypted disk. Doing that is up to you: setup records whether your
+backups are encrypted, and the health check keeps flagging unencrypted
+ones. [SECURITY.md](SECURITY.md) has the details and how to report a
+security problem.
+
+## Stability and license
+
+From 1.0.0, 1.x releases keep the workspace layout, the upgrade path, the
+answers file and the rule keys working; [STABILITY.md](STABILITY.md) says
+exactly what is promised. MIT licensed: see [LICENSE](LICENSE).
 
 ## Layout
 
     INSTALL.md       the installing AI's instructions
     install.py       builds a workspace from the interview's answers
     upgrade.py       upgrades an existing workspace to this kit version
-    tiers/           account rules, default working style, project template
+    tiers/           account rules, default working style, project template,
+                     and keys.json, the rule keys the doctor checks
     workspace/       everything the installer places, each system with its README
     sanitize.py      checks a folder for secrets before anything is shared
 

@@ -47,6 +47,9 @@ def manifest_tracked(rel):
 # PROJECT_TEMPLATE.
 PROJECT_NAME = r"^[A-Za-z0-9][A-Za-z0-9_-]*$"
 PROJECT_TEMPLATE = "Setup/project-template.md"
+# The kit's tiers/keys.json (format: its _about), copied here by install.py
+# and refreshed by upgrade.py; the doctor's rule-keys check reads it.
+RULE_KEYS = "Setup/rule-keys.json"
 
 
 def project_slug(name):

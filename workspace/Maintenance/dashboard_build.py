@@ -16,8 +16,9 @@ drifting, red (bad) when it needs the user's hand - and every red state is
 ALSO filed to the attention queue under a "board:" key, so nothing
 off-nominal appears without being pointed out. One amber state is filed
 the same way, once: no backup destination set (a choice the user may have
-made on purpose, so it is not red). A board-filed item whose state has
-gone back to normal is cleared by the next build.
+made on purpose, so it is not red). Unencrypted backups, or no recorded
+answer on encryption, are amber and never filed. A board-filed item whose
+state has gone back to normal is cleared by the next build.
 
 Scheduled pieces, the doctor and restore drills are read from the run log,
 Scheduled/runs.log, one line per run:
@@ -161,6 +162,31 @@ def backup_runs():
                     and p[2] != "DRY-RUN":
                 last[p[1]] = (p[2], " | ".join(p[3:]))
     return last
+
+
+def backup_encryption():
+    """(state, text) for the recorded answer backup.encrypted in
+    Setup/answers.json, or None when no backup destination is set (the
+    answer is then ignored). state "ok" when true; "warn" when false (the
+    user's choice) or when nothing is recorded. The doctor reads this too,
+    so the two never disagree."""
+    try:
+        cfg = json.loads(read(os.path.join(ROOT, "workspace.json"))) \
+            .get("backup", {})
+    except (OSError, ValueError):
+        return None
+    if not cfg.get("daily_dest") and not cfg.get("weekly_dest"):
+        return None
+    try:
+        enc = (json.loads(read(os.path.join(ROOT, "Setup", "answers.json")))
+               .get("backup") or {}).get("encrypted")
+    except (OSError, ValueError, AttributeError):
+        enc = None
+    if enc is True:
+        return "ok", "encrypted destination (recorded at setup)"
+    if enc is False:
+        return "warn", "not encrypted, by your recorded choice"
+    return "warn", "not recorded whether the destination is encrypted"
 
 
 def latest_snapshot(dest):
@@ -765,6 +791,11 @@ class Board:
             out.append('<div class="row"><div>%sDestination</div><div '
                        'class="r">%s · %d%% full%s</div></div>'
                        % (d, esc(dest), pct, tail))
+        enc = backup_encryption()   # a choice, so amber and never filed
+        if enc:
+            out.append('<div class="row"><div>%sEncryption</div><div '
+                       'class="r">%s</div></div>'
+                       % (self.dot(enc[0]), esc(enc[1])))
         import restore_drill  # same folder; owns the failure's key and text
         drill = self.runs.get(restore_drill.TASK)
         if not drill:
