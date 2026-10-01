@@ -15,23 +15,32 @@ your AI is the operator and the scripts are the machinery.
 Open your AI, even a chat in your browser, and paste this:
 
 > Install Fieldbook OS for me. Get it from
-> https://github.com/NullHypocrisy/fieldbook-os (clone it, or use the copy
-> I have at: _path, if you have one_), then read INSTALL.md in it and follow
-> it from the top. Ask me what you need to know as you go.
+> https://github.com/NullHypocrisy/fieldbook-os, then read INSTALL.md in it
+> and follow it from the top. Ask me what you need to know as you go.
 
-The AI checks what your computer needs, walks you through a short
-interview (where things go, how you like to work, backups, which projects
-to start with), runs the installer, proves the result, and offers a guided
-tour. Nothing is installed without telling you exactly what first.
+(Already downloaded it? Add "My copy is at" and the folder.)
+
+The AI checks what your computer needs, shows you the whole plan once, and
+asks whether to use the defaults or walk you through each choice. Say yes
+and it does the rest: installs what's missing, builds the workspace, sets
+up the scheduled jobs, proves it all works, and offers a guided tour. It
+still stops for you on sign-ins, system settings, anything that costs
+money, and anything that touches what you already have.
 
 **Supported:** Windows, Python 3.10 or newer, git. The AI helps you get
 Python and git if you don't have them. macOS and Linux work best-effort:
 same steps, with the AI doing by hand whatever the scripts don't cover yet.
 
+**Plan:** Fieldbook OS assumes a paid plan on whichever AI service you use.
+A free plan installs it, with limits: usage caps can cut a long install
+short, and the scheduled jobs need your AI's command-line tool, which
+free plans may not include (Claude's free plan has no Claude Code). Without
+one, each job becomes a prompt you run yourself at its time.
+
 **Your AI can't reach your files?** A browser or phone chat usually
 can't. It will notice, walk you through setting up one that can (for
-Claude, the desktop app with a file connector), and hand you the prompt
-to paste there. If you'd rather install nothing, it can still fill in
+Claude, the desktop app with the Desktop Commander extension; for ChatGPT,
+Codex), and carry on there. If you'd rather install nothing, it can still fill in
 `tiers/account.md` for you to paste into its custom instructions.
 
 ## What you get

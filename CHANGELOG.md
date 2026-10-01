@@ -3,6 +3,31 @@
 What changed in each version, newest first. One entry per version, short
 on purpose; the commit history has the detail.
 
+## 0.9.7 (2026-09-30)
+
+- The install starts with the whole plan and one choice: quick (defaults,
+  asking only project names and backups) or customize (every question).
+  One yes covers the install and nothing beyond it; sign-ins, system
+  settings, pasting account rules, paid services and anything already on
+  the machine still stop for you.
+- Works from any AI service: the installing AI finds its own file and
+  command-line tools (Codex for ChatGPT, Claude Desktop or Claude Code for
+  Claude), with tested sizes for each tool's account rules.
+- After the account rules are placed, the install continues in a fresh
+  session whose first line proves it read AGENTS.md; it ends by running
+  every scheduled job through the scheduler and writing the diagnostic
+  report.
+- Account rules rewritten (look for a file tool before deciding there is
+  none; write down how to get an answer, not a frozen one; the session's
+  start date goes stale). Working style: Decisions and Answers reworded,
+  and a new optional Voice item (rule key added to tiers/keys.json).
+- README states the paid-plan assumption and what a free plan can't do;
+  the install prompt has no placeholder to fill in.
+- Install fixes from test 1: Python store stub, winget source and false
+  "cancelled", PATH refresh, files without a byte-order mark, CLAUDE.md as
+  the one line @AGENTS.md, launch routes proven by a live run, jobs run
+  only while logged on.
+
 ## 0.9.6 (2026-09-30)
 
 - MIT license (LICENSE), a written promise of what 1.x keeps stable

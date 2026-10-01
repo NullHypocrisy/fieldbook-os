@@ -56,7 +56,7 @@ def commits(ws):
 
 
 def answers(tmp, name, ws, **over):
-    a = {"workspace": ws, "account_slot_chars": 1500, "projects": ["alpha"],
+    a = {"workspace": ws, "account_slot_chars": 2500, "projects": ["alpha"],
          "working_style": {"Suggestions": "drop"},
          "backup": {"weekly_dest": os.path.join(tmp, name + "-bk"),
                     "encrypted": True},
@@ -231,8 +231,8 @@ def main():
           read(os.path.join(KIT, "tiers", "keys.json")) != "")
     slot = os.path.join(ws, "Setup", "account-slot.txt")
     agents = read(os.path.join(ws, "AGENTS.md"))
-    check("install: 1500 slot takes principles, AGENTS.md the style",
-          os.path.exists(slot) and len(read(slot).strip()) <= 1500 and
+    check("install: 2500 slot takes principles, AGENTS.md the style",
+          os.path.exists(slot) and len(read(slot).strip()) <= 2500 and
           "Times are %s." % zone in read(slot) and "{" not in read(slot) and
           install.MARK_BEGIN in agents and "- Decisions:" in agents and
           "Suggestions" not in agents and "Ask:" not in agents)
