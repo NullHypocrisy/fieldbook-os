@@ -13,7 +13,9 @@ broken on purpose. Every scheduled task's precheck proves EMPTY on the
 fresh copy and WORK on a planted case, and the wrappers run. The restore
 drill passes on a real snapshot and fails on a planted corruption. Then the
 doctor runs on a populated install (every check
-PASS) and on deliberately broken ones (each break named, with its fix);
+PASS), writes its diagnostic report there (planted sidecar, byte-order mark,
+odd journal line and fake .env key) and composes an issue body from it, and
+runs on deliberately broken installs (each break named, with its fix);
 that part is skipped when the doctor itself started this run.
 Prints PASS/FAIL per check and exits nonzero on any failure.
 
@@ -21,6 +23,7 @@ Usage:  python Maintenance/smoke_test.py   (from anywhere)
 """
 
 import fnmatch
+import getpass
 import json
 import os
 import re
@@ -32,8 +35,8 @@ import tempfile
 from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
-from workspace_common import (MANIFEST, MARK_BEGIN, MARK_END,  # noqa: E402
-                              PROJECT_TEMPLATE, SMOKE_NESTED, git,
+from workspace_common import (JOURNAL, MANIFEST, MARK_BEGIN,  # noqa: E402
+                              MARK_END, PROJECT_TEMPLATE, SMOKE_NESTED, git,
                               git_identity, manifest_text, project_files,
                               workspace_root)
 
@@ -640,6 +643,7 @@ def doctor_checks(tmp):
                 encoding="utf-8").read()
     check("doctor: writes the line the board's Doctor chip reads",
           re.search(r"\| doctor \| exit 0 \| PASS$", runs, re.M), runs)
+    report_checks(dws, doc)
 
     # Break 1: a removed folder.
     held = os.path.join(tmp, "held-bridge")
@@ -718,6 +722,93 @@ def doctor_checks(tmp):
           and "tiers/account.md" in out, out)
 
 
+REPORT_ITEMS = ("tree", "workspace rules", "account tier", "answers",
+                "version", "scheduled", "backup", "git", "journal",
+                "installer state", "time zone", "leftover sidecars",
+                "byte-order marks", "git history", "python", "git version",
+                "AI tool", "kit version")
+REPORT_FILES = ("summary.md", "doctor.txt", "smoke.txt", "journal.txt",
+                "scheduler.txt", "git-log.txt", "env-keys.txt")
+
+
+def report_status(summary, item):
+    m = re.search(r"^\| %s \| (PASS|WARN|FAIL|UNKNOWN) \|" % re.escape(item),
+                  summary, re.M)
+    return m.group(1) if m else None
+
+
+def report_checks(dws, doc):
+    """doctor --report on the populated install, with planted trouble, and
+    the issue body built from it."""
+    fake = "smoke-" + "fake-value-" + "7f3a9c"
+    plants = [os.path.join(dws, ".env"),
+              os.path.join(dws, "Maintenance", "README.md.fieldbook-new")]
+    open(plants[0], "w", encoding="utf-8").write("SMOKE_KEY=%s\n" % fake)
+    open(plants[1], "w", encoding="utf-8").write("kit version\n")
+    agents_p = os.path.join(dws, "AGENTS.md")
+    raw = open(agents_p, "rb").read()
+    open(agents_p, "wb").write(b"\xef\xbb\xbf" + raw)
+    jp = os.path.join(dws, *JOURNAL.split("/"))
+    with open(jp, "a", encoding="utf-8") as f:
+        f.write("2026-01-01 09:00 | ai | install python | winget install "
+                "Python.Python.3.12 | exit 0\nan unformatted note\n")
+    rc, out = run(dws, doc, "--report", "--no-smoke")
+    m = re.search(r"^REPORT: (.+)/summary\.md$", out, re.M)
+    bundle = os.path.join(dws, *m.group(1).split("/")) if m else ""
+    summary = open(os.path.join(bundle, "summary.md"), encoding="utf-8")\
+        .read() if m and os.path.isdir(bundle) else ""
+    man = open(os.path.join(dws, "Temp", "managed", "manifest.md"),
+               encoding="utf-8").read()
+    check("report: bundle and summary written, 14-day manifest line",
+          summary and re.search(r"^(\S+) \| (\S+) \| %s \| doctor"
+                                % re.escape(m.group(1)), man, re.M), out)
+    missing = [i for i in REPORT_ITEMS if not report_status(summary, i)]
+    missing += [f for f in REPORT_FILES
+                if not os.path.isfile(os.path.join(bundle, f))]
+    check("report: summary covers every item, bundle holds every file",
+          not missing and re.search(r"^\| job \S+ \| (PASS|WARN|FAIL|"
+                                    r"UNKNOWN) \|", summary, re.M), missing)
+    check("report: planted sidecar and byte-order mark are not PASS, the "
+          "odd journal line kept", report_status(summary, "leftover "
+                                                 "sidecars") == "WARN"
+          and report_status(summary, "byte-order marks") == "WARN"
+          and "1 not in the line format" in summary and "an unformatted "
+          "note" in open(os.path.join(bundle, "journal.txt"),
+                         encoding="utf-8").read(), summary[:2500])
+    leaked = [f for f in os.listdir(bundle) if fake in open(os.path.join(
+        bundle, f), encoding="utf-8", errors="replace").read()]
+    check("report: no .env value in the bundle, key names only",
+          not leaked and "SMOKE_KEY" in open(os.path.join(
+              bundle, "env-keys.txt"), encoding="utf-8").read(), leaked)
+    runs = open(os.path.join(dws, "Scheduled", "runs.log"),
+                encoding="utf-8").read().splitlines()
+    check("report: the doctor's run-log line is still written",
+          runs and "| doctor | exit " in runs[-1], runs[-1:])
+    sanitize = os.path.join(SRC, "..", "sanitize.py")
+    if os.path.exists(sanitize):
+        rc, out = run(dws, sanitize, bundle)
+        check("report: sanitize.py passes on the bundle", rc == 0, out)
+    problem = os.path.join(dws, "Temp", "managed", "problem.md")
+    open(problem, "w", encoding="utf-8").write(
+        "It broke in %s for %s. " % (dws, getpass.getuser()) + "x" * 5000)
+    issue = os.path.join(dws, "Temp", "managed", "feedback", "report.md")
+    rc, out = run(dws, doc, "--issue", bundle, "--problem", problem,
+                  "--out", issue)
+    body = open(issue, encoding="utf-8").read() if rc == 0 else ""
+    check("report: issue body fits 6,000, keeps the table, trims details",
+          0 < len(body) <= 6000 and "| Item | Status | Detail |" in body
+          and "| kit version |" in body and "trimmed" in body.lower(),
+          "%d chars: %s" % (len(body), out))
+    check("report: issue body holds no .env value, workspace path or "
+          "user name", fake not in body and dws.lower() not in body.lower()
+          and not re.search(r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])"
+                            % re.escape(getpass.getuser()), body, re.I)
+          and "<workspace>" in body and "<user>" in body, body[:400])
+    for p in plants:
+        os.remove(p)
+    open(agents_p, "wb").write(raw)
+
+
 def procedures(ws):
     """The trigger index: shipped current, complete, idempotent, strict."""
     skills = os.path.join(ws, "Skills")
@@ -788,6 +879,8 @@ def kit_checks():
 
 def main():
     tmp = tempfile.mkdtemp(prefix="workspace-smoke-")
+    # The home-folder install journal: a throwaway one, never the user's.
+    os.environ["FIELDBOOK_HOME"] = os.path.join(tmp, "home")
     ws = os.path.join(tmp, "ws")
     fresh_clone(SRC, ws)
     print("smoke workspace (simulated fresh clone): %s\n" % ws)

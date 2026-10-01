@@ -73,3 +73,33 @@ Its result is the board's Doctor chip. Its docstring owns the checks.
 
     python Maintenance/doctor.py              (about a minute)
     python Maintenance/doctor.py --no-smoke   (seconds)
+    python Maintenance/doctor.py --report     (also writes a diagnostic bundle)
+
+`--report` writes one folder, `Temp/managed/doctor-report-YYYYMMDD-HHMM/`,
+with a manifest line giving it 14 days: `summary.md` marks every item PASS,
+WARN, FAIL or UNKNOWN (what this computer cannot tell), and beside it the
+evidence the summary points at. It reads state and writes only that folder,
+its manifest line and the doctor's usual run-log line.
+The bundle never leaves the computer; the feedback procedure builds the
+public bug report from its summary (`doctor.py --issue`).
+
+## The install journal
+
+One plain-text log of how this workspace was installed and upgraded, so a
+failed install says what was tried and what happened.
+
+- **Before the workspace exists:** `fieldbook-install-journal.txt` in the
+  user's home folder. The installing AI writes these lines itself, with a
+  plain file write, from its first step.
+- **After:** `Setup/install-journal.txt`. `install.py` moves the home-folder
+  lines in on its first run (appending if the file already exists) and
+  deletes the home copy once they are written; from then on `install.py`
+  and `upgrade.py` append their own steps. Git ignores it.
+- **One line per step**, local clock:
+
+      YYYY-MM-DD HH:MM | WHO | STEP | COMMAND | RESULT
+
+  WHO is `ai`, `install.py` or `upgrade.py`. STEP names what was attempted,
+  COMMAND what was run (`-` for none), RESULT the exit code or what came of
+  it. Append only; never edit a line. A line that does not fit the format
+  is kept as written, never rejected.

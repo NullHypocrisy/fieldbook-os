@@ -31,8 +31,10 @@ A question this kit's installer asks (install.ANSWERS_ABOUT) that the saved
 answers never had is listed for the AI to ask; --apply refuses until each
 is answered in Setup/answers.json. New scheduled tasks are copied, not
 wired, and reported. Setup/ and VERSION are the installer's own and are
-rewritten. --apply brackets the run in two git commits (before, after) and
-appends one line to today's day log, Memory/global/logs/YYYY-MM-DD.md.
+rewritten. --apply brackets the run in two git commits (before, after),
+appends one line to today's day log, Memory/global/logs/YYYY-MM-DD.md, and
+appends start and finish lines (or the failure) to the install journal
+(Maintenance/README.md owns its format); a preview writes none.
 
 Exit codes (tools/EXIT-CODES.md): 0 done, previewed, or nothing to do (the
 printed word says which); 1 crashed; 2 broken (no VERSION or answers, not
@@ -54,7 +56,7 @@ import install  # noqa: E402
 from install import HASHES, SETUP, SIDECAR, Broken, sha  # noqa: E402
 from release_manifest import MANIFESTS, kit_version  # noqa: E402
 from workspace_common import (MANIFEST, git, git_identity,  # noqa: E402
-                              manifest_tracked)
+                              journal, manifest_tracked)
 
 REPORT = SETUP + "/upgrade-report.md"
 
@@ -101,8 +103,9 @@ def load_json(p, key=None):
 
 
 class Upgrade:
-    def __init__(self, ws):
+    def __init__(self, ws, cmdline="upgrade.py"):
         self.ws = os.path.abspath(ws)
+        self.cmdline = cmdline
         self.plan = []          # (action, rel, data)
         self.lines = []         # report lines
         self.held = []
@@ -283,6 +286,8 @@ class Upgrade:
         self.touched = []
         tag = "Fieldbook OS upgrade %s -> %s" % (self.old, self.new)
         self.commit(tag + ": before")
+        self.journal("start", "%s -> %s, %d planned file action(s)" % (
+            self.old, self.new, len(self.plan)))
         for action, rel, data in self.plan:
             if action in ("add", "replace"):
                 self.write(rel, data)
@@ -350,12 +355,18 @@ class Upgrade:
         self.commit(tag, sorted(set(self.touched)))
         for h in self.held:
             print("HELD " + h)
+        self.journal("finish", "upgraded %s -> %s: %s; %d held (exit %d)" % (
+            self.old, self.new, summary, len(self.held),
+            3 if self.held else 0))
         if self.held:
             print("DONE %s -> %s with %d item(s) to act on; see %s"
                   % (self.old, self.new, len(self.held), REPORT))
             return 3
         print("DONE: upgraded %s -> %s" % (self.old, self.new))
         return 0
+
+    def journal(self, step, result):
+        journal(self.ws, "upgrade.py", step, self.cmdline, result)
 
 
 def main(argv=None):
@@ -366,10 +377,12 @@ def main(argv=None):
     mode.add_argument("--dry-run", action="store_true",
                       help="preview (the default; install.py's flag)")
     a = ap.parse_args(argv)
+    cmdline = "python upgrade.py " + " ".join(
+        sys.argv[1:] if argv is None else argv)
     try:
         if not shutil.which("git"):
             raise Broken("git is not installed")
-        up = Upgrade(a.workspace)
+        up = Upgrade(a.workspace, cmdline)
         up.load()
         if vt(up.old) > vt(up.new):
             raise Broken("the workspace is at %s, newer than this kit (%s); "
@@ -386,7 +399,14 @@ def main(argv=None):
         if not a.apply:
             print("PREVIEW: nothing was written; rerun with --apply")
             return 0
-        return up.apply()
+        try:
+            return up.apply()
+        except Broken as e:
+            up.journal("apply", "BROKEN: %s" % e)
+            raise
+        except Exception as e:
+            up.journal("apply", "CRASHED: %r" % e)
+            raise
     except Broken as e:
         print("BROKEN: %s" % e)
         return 2

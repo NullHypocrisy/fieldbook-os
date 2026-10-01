@@ -135,6 +135,80 @@ def workspace_root(start):
         p = parent
 
 
+def machine_zone():
+    """The machine's time zone name as its OS shows it, or None when it
+    cannot be read. Read only: nothing here ever changes it."""
+    import platform
+    if platform.system() == "Windows":
+        try:
+            r = subprocess.run(["tzutil", "/g"], capture_output=True,
+                               text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        zone = r.stdout.strip()
+        return zone if r.returncode == 0 and zone else None
+    m = re.search(r"zoneinfo/(.+)$", os.path.realpath("/etc/localtime"))
+    return m.group(1) if m else None
+
+
+# Install journal: Maintenance/README.md owns the name, place and line
+# format. FIELDBOOK_HOME stands in for the home folder (self-tests only).
+JOURNAL = "Setup/install-journal.txt"
+HOME_JOURNAL = "fieldbook-install-journal.txt"
+JOURNAL_LINE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2} \| [^|]+ \| ")
+
+
+def home_journal():
+    home = os.environ.get("FIELDBOOK_HOME") or os.path.expanduser("~")
+    return os.path.join(home, HOME_JOURNAL)
+
+
+def journal_path(ws):
+    """The workspace's journal once the workspace folder exists, else the
+    home-folder one."""
+    if ws and os.path.isdir(ws):
+        return os.path.join(ws, *JOURNAL.split("/"))
+    return home_journal()
+
+
+def journal(ws, who, step, command, result):
+    """Append one journal line; never raises (a journal is evidence, not a
+    reason to fail a run)."""
+    def flat(s):
+        return " ".join(str(s).split()) or "-"
+    line = "%s | %s | %s | %s | %s\n" % (
+        datetime.now().strftime("%Y-%m-%d %H:%M"), flat(who), flat(step),
+        flat(command), flat(result).replace(" | ", " / "))
+    try:
+        p = journal_path(ws)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(line)
+    except OSError:
+        pass
+
+
+def adopt_home_journal(ws):
+    """Move the home-folder journal into the workspace's, appending; the
+    home copy is deleted only after the append is written. Returns the
+    number of lines moved."""
+    src = home_journal()
+    if not (ws and os.path.isdir(ws) and os.path.isfile(src)):
+        return 0
+    with open(src, "rb") as f:
+        data = f.read()
+    if data and not data.endswith(b"\n"):
+        data += b"\n"
+    dest = os.path.join(ws, *JOURNAL.split("/"))
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    with open(dest, "ab") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.remove(src)
+    return data.count(b"\n")
+
+
 def log_line(log_path, msg):
     """Append a timestamped line to log_path and echo it."""
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")

@@ -2,7 +2,8 @@
 
 Each check prints PASS, WARN (drifting) or FAIL (needs your hand) and, for
 anything short of PASS, the fix. The doctor names fixes; it never applies
-them, and it changes nothing except its own run-log line.
+them, and it changes nothing except its own run-log line and, with
+--report, its own bundle.
 
   tree             every file in Setup/manifest.json is present (format:
                    workspace_common.py); no unmerged .fieldbook-new sidecar
@@ -28,28 +29,51 @@ Thresholds and log readers are the board's own (dashboard_build.py), so the
 doctor and the board never disagree. The doctor's line goes to
 Scheduled/runs.log as task "doctor"; the board's Doctor chip reads it.
 
-Usage:  python Maintenance/doctor.py [--no-smoke]
+Usage:  python Maintenance/doctor.py [--no-smoke] [--report]
+        python Maintenance/doctor.py --issue BUNDLE [--problem FILE]
+                                     [--out FILE]
   --no-smoke  skip the smoke and dashboard checks (seconds, not a minute);
               the log line says they were skipped
-Exit codes (tools convention): 0 every check PASS; 1 crashed; 2 at least
-one FAIL; 3 WARNs and no FAIL.
+  --report    also write a diagnostic bundle, Temp/managed/doctor-report-
+              YYYYMMDD-HHMM/ (14-day manifest line): summary.md marking
+              every item PASS / WARN / FAIL (UNKNOWN where this OS cannot
+              tell), the doctor and smoke output, the install journal,
+              installer state, each scheduled job as the scheduler reports
+              it (Windows: Task Scheduler, folder "Fieldbook OS"), time
+              zone, leftover sidecars, byte-order marks, the last 20
+              commits, Python, Git and AI tool versions, kit VERSION, and
+              .env key names. No .env value is ever written; any that
+              shows up in a copied file is replaced with <redacted>.
+  --issue     compose the public issue body from BUNDLE's summary: the
+              problem text (FILE, the user's words) first, then the
+              summary table, then not-passing details, trimmed from the
+              end to 6,000 characters; workspace and home paths, login and
+              machine names replaced. Written to --out (default
+              BUNDLE/issue.md). The same text serves both filing routes.
+Exit codes (tools convention): 0 every check PASS (--issue: written); 1
+crashed; 2 at least one FAIL (--issue: no bundle there); 3 WARNs and no
+FAIL.
 """
 
 import argparse
+import getpass
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..")))
 sys.path.insert(0, HERE)
-from workspace_common import (MANIFEST, MARK_BEGIN, MARK_END,  # noqa: E402
-                              SMOKE_NESTED, git, workspace_root)
+from workspace_common import (JOURNAL, JOURNAL_LINE,  # noqa: E402
+                              MANIFEST, MARK_BEGIN, MARK_END, SMOKE_NESTED,
+                              git, home_journal, machine_zone,
+                              workspace_root)
 import dashboard_build as board  # noqa: E402
 
 ROOT = workspace_root(HERE)
@@ -452,6 +476,329 @@ def check_dashboard(smoke_out):
             "pass in the smoke test", None)
 
 
+# ---------------------------------------------------------------- report
+
+REPORT_DAYS = 14
+ISSUE_CAP = 6000
+SCHED_FOLDER = "\\Fieldbook OS\\"   # install.py registers every job here
+NEVER_RUN, RUNNING = 267011, 267009   # Task Scheduler result codes
+SCHED_QUERY = r"""
+$ProgressPreference = 'SilentlyContinue'
+$t = @(Get-ScheduledTask -TaskPath '%s' -ErrorAction SilentlyContinue)
+$o = foreach ($x in $t) {
+  $i = Get-ScheduledTaskInfo -InputObject $x
+  [pscustomobject]@{
+    name = $x.TaskName; state = [string]$x.State
+    action = (@($x.Actions | ForEach-Object {
+      ($_.Execute + ' ' + $_.Arguments).Trim() }) -join '; ')
+    triggers = (@($x.Triggers | ForEach-Object {
+      [string]$_.StartBoundary }) -join '; ')
+    last_run = $(if ($i.LastRunTime) {
+      $i.LastRunTime.ToString('yyyy-MM-dd HH:mm') } else { '' })
+    last_result = $i.LastTaskResult
+    next_run = $(if ($i.NextRunTime) {
+      $i.NextRunTime.ToString('yyyy-MM-dd HH:mm') } else { '' })
+  }
+}
+ConvertTo-Json -InputObject @($o) -Depth 3
+""" % SCHED_FOLDER
+
+
+def env_entries():
+    """[(key, value)] from every .env file in the workspace. Values are
+    used only to scrub them out of the bundle, never written anywhere."""
+    out = []
+    for dirpath, dirnames, files in os.walk(ROOT):
+        dirnames[:] = [d for d in dirnames if d not in (".git",
+                                                        "__pycache__")]
+        for fn in files:
+            if fn == ".env" or fn.endswith(".env"):
+                for line in read(os.path.join(dirpath, fn)).splitlines():
+                    m = re.match(r"^\s*(?:export\s+)?([A-Za-z_]\w*)\s*=\s*"
+                                 r"(.*?)\s*$", line)
+                    if m:
+                        out.append((m.group(1), m.group(2).strip("'\"")))
+    return out
+
+
+def scrub(text, values):
+    for v in sorted(values, key=len, reverse=True):
+        text = text.replace(v, "<redacted>")
+    return text
+
+
+def run_cmd(argv, timeout=60, merge=True):
+    """(returncode, output) or (None, why) when it could not run; merge
+    False returns stdout alone (stderr only when the run failed)."""
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True,
+                           timeout=timeout, stdin=subprocess.DEVNULL,
+                           errors="replace")
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, repr(e)
+    out = r.stdout if not merge and r.returncode == 0 else \
+        r.stdout + r.stderr
+    return r.returncode, out.strip()
+
+
+def query_scheduler():
+    """(jobs by name, raw text); jobs is None when the scheduler could
+    not be asked (a different OS, or the query failed)."""
+    if platform.system() != "Windows":
+        return None, "this OS's scheduler is not queried (Windows only)"
+    import base64
+    enc = base64.b64encode(SCHED_QUERY.encode("utf-16-le")).decode()
+    rc, out = run_cmd(["powershell", "-NoProfile", "-NonInteractive",
+                       "-EncodedCommand", enc], timeout=120, merge=False)
+    if rc != 0:
+        return None, "query failed (%s): %s" % (rc, out[-500:])
+    try:
+        jobs = json.loads(out or "[]")
+    except ValueError:
+        return None, "query output is not JSON: " + out[-500:]
+    if isinstance(jobs, dict):
+        jobs = [jobs]
+    return {j.get("name"): j for j in jobs if isinstance(j, dict)}, out
+
+
+def job_rows(ans):
+    """[(item, status, detail)] for every scheduled job, and the raw
+    scheduler answer for the bundle."""
+    sdir = path("Scheduled")
+    tasks = sorted(d for d in os.listdir(sdir) if os.path.isfile(
+        os.path.join(sdir, d, "INSTRUCTIONS.md"))) \
+        if os.path.isdir(sdir) else []
+    hand = ((ans or {}).get("scheduler") or {}).get("kind") == "none"
+    jobs, raw = query_scheduler()
+    rows = []
+    for t in sorted(set(tasks) | set(jobs or {})):
+        name = "job " + t
+        if jobs is None:
+            rows.append((name, "UNKNOWN", raw))
+            continue
+        j = jobs.get(t)
+        if not j:
+            rows.append((name, "PASS", "run by hand, as chosen at setup")
+                        if hand else (name, "FAIL", "not registered with "
+                                      "the scheduler (%s)" % SCHED_FOLDER))
+            continue
+        res, last = j.get("last_result"), j.get("last_run") or "never"
+        if j.get("state") == "Disabled":
+            rows.append((name, "WARN", "registered but disabled"))
+        elif res == NEVER_RUN:
+            rows.append((name, "WARN", "registered, never run; next %s"
+                         % (j.get("next_run") or "not scheduled")))
+        elif res in (0, RUNNING):
+            rows.append((name, "PASS", "last run %s, %s" % (
+                last, "running now" if res == RUNNING else "result 0")))
+        else:
+            rows.append((name, "FAIL", "last run %s, result %s (0x%X)" % (
+                last, res, res & 0xFFFFFFFF if isinstance(res, int)
+                else 0)))
+    return rows, raw
+
+
+def ai_tool_version(ans):
+    cmd = (((ans or {}).get("scheduler") or {}).get("launch_command")
+           or "").strip()
+    m = re.match(r'"([^"]+)"|(\S+)', cmd)
+    if not m:
+        return "UNKNOWN", "no AI launch command recorded"
+    tok = m.group(1) or m.group(2)
+    rc, out = run_cmd([shutil.which(tok) or tok, "--version"])
+    line = (out or "").splitlines()[0].strip() if out else ""
+    if rc != 0 or not line:
+        return "UNKNOWN", "%s --version did not answer (%s)" % (tok, rc)
+    return "PASS", "%s: %s" % (tok, line)
+
+
+def report_items(smoke_out):
+    """[(item, status, detail)] beyond the doctor's own checks, and
+    {bundle file name: text}."""
+    items, files = [], {}
+    jp, hp = path(JOURNAL), home_journal()
+    text = read(jp) if os.path.isfile(jp) else ""
+    home = read(hp) if os.path.isfile(hp) else ""
+    lines = [l for l in (text + home).splitlines() if l.strip()]
+    odd = sum(1 for l in lines if not JOURNAL_LINE.match(l))
+    if not lines:
+        items.append(("journal", "WARN", "no install journal (%s)" % JOURNAL))
+    else:
+        items.append(("journal", "WARN" if home else "PASS", "%d line%s%s%s"
+                      % (len(lines), "" if len(lines) == 1 else "s",
+                         ", %d not in the line format (kept as written)"
+                         % odd if odd else "", "; %d still in the home-"
+                         "folder journal" % len(home.splitlines())
+                         if home else "")))
+        files["journal.txt"] = text + ("\n# still in the home-folder "
+                                       "journal:\n" + home if home else "")
+    sp = path("Setup/install-state.json")
+    if not os.path.isfile(sp):
+        items.append(("installer state", "WARN", "no Setup/install-state."
+                      "json (not built by install.py)"))
+    else:
+        try:
+            done = json.loads(read(sp)).get("phases_done", [])
+            items.append(("installer state", "PASS" if "stamp" in done
+                          else "WARN", "phases done: %s" % (
+                              ", ".join(done) or "none")))
+        except (ValueError, AttributeError) as e:
+            items.append(("installer state", "FAIL", "Setup/install-state."
+                          "json unreadable (%s)" % e))
+    for rel in ("install-state.json", "install-report.md",
+                "upgrade-report.md", "hand-run-tasks.md"):
+        if os.path.isfile(path("Setup/" + rel)):
+            files["setup-" + rel] = read(path("Setup/" + rel))
+    files["smoke.txt"] = smoke_out or "(smoke test skipped: --no-smoke)\n"
+    ans, _ = answers()
+    rows, raw = job_rows(ans)
+    items += rows
+    files["scheduler.txt"] = raw + "\n"
+    zone = machine_zone()
+    items.append(("time zone", "PASS" if zone else "UNKNOWN",
+                  zone or "the machine's time zone could not be read"))
+    sidecars = []
+    for dirpath, dirnames, fs in os.walk(ROOT):
+        dirnames[:] = [d for d in dirnames if d not in (".git",
+                                                        "__pycache__")]
+        sidecars += [os.path.relpath(os.path.join(dirpath, f), ROOT)
+                     .replace("\\", "/") for f in fs if f.endswith(SIDECAR)]
+    items.append(("leftover sidecars", "WARN" if sidecars else "PASS",
+                  ", ".join(sidecars) or "none"))
+    boms = []
+    for rel in RULE_FILES:
+        try:
+            with open(path(rel), "rb") as f:
+                if f.read(3) == b"\xef\xbb\xbf":
+                    boms.append(rel)
+        except OSError:
+            pass
+    items.append(("byte-order marks", "WARN" if boms else "PASS",
+                  ", ".join(boms) or "none in " + ", ".join(RULE_FILES)))
+    rc, log = git(ROOT, "log", "-20", "--date=format:%Y-%m-%d %H:%M",
+                  "--format=%h %ad %s")
+    items.append(("git history", "PASS" if rc == 0 else "FAIL",
+                  "last %d commit%s in git-log.txt" % (
+                      len(log.splitlines()), "" if len(log.splitlines()) == 1
+                      else "s") if rc == 0 else "no history: " + log[:200]))
+    files["git-log.txt"] = log + "\n"
+    items.append(("python", "PASS", platform.python_version()))
+    rc, out = run_cmd(["git", "--version"])
+    items.append(("git version", "PASS" if rc == 0 else "UNKNOWN",
+                  out if rc == 0 else "git --version did not answer"))
+    items.append(("AI tool",) + ai_tool_version(ans))
+    vp = path("VERSION")
+    first = (read(vp).splitlines() or [""])[0].strip() \
+        if os.path.isfile(vp) else ""
+    items.append(("kit version", "PASS" if first else "WARN",
+                  first or "no VERSION file"))
+    keys = sorted(set(k for k, _ in env_entries()))
+    if keys:
+        files["env-keys.txt"] = ("Key names in the workspace's .env files "
+                                 "(values are never copied):\n"
+                                 + "\n".join(keys) + "\n")
+    return items, files
+
+
+def summary_text(items, files):
+    zone = machine_zone() or "UNKNOWN"
+    out = ["# Fieldbook OS diagnostic report", "",
+           "Generated %s (machine time zone %s) on %s." % (
+               datetime.now().strftime("%Y-%m-%d %H:%M"), zone,
+               platform.platform()), "",
+           "| Item | Status | Detail |", "|---|---|---|"]
+    for name, status, detail, _ in items:
+        out.append("| %s | %s | %s |" % (name, status, str(detail).replace(
+            "|", "/").replace("\n", " ")[:300]))
+    out += ["", "## Not passing", ""]
+    bad = [i for i in items if i[1] != "PASS"]
+    for name, status, detail, fix in bad:
+        out += ["### %s (%s)" % (name, status), "", str(detail)]
+        if fix:
+            out.append("fix: " + fix)
+        out.append("")
+    if not bad:
+        out += ["Nothing: every item passed.", ""]
+    out += ["## In this bundle", ""] + ["- " + f for f in sorted(files)]
+    return "\n".join(out) + "\n"
+
+
+def write_report(doctor_text, smoke_out):
+    """Write the bundle; return its workspace-relative folder."""
+    items, files = report_items(smoke_out)
+    rows = [(n, s, d, f) for n, s, d, f in RESULTS] + \
+        [(n, s, d, None) for n, s, d in items]
+    files["doctor.txt"] = doctor_text
+    files["summary.md"] = summary_text(rows, files)
+    secrets = [v for _, v in env_entries() if len(v) >= 4]
+    stamp = datetime.now()
+    rel = "Temp/managed/doctor-report-" + stamp.strftime("%Y%m%d-%H%M")
+    base, n = rel, 1
+    while os.path.exists(path(rel)):
+        n += 1
+        rel = "%s-%d" % (base, n)
+    os.makedirs(path(rel))
+    for name, text in files.items():
+        with open(os.path.join(path(rel), name), "w", encoding="utf-8",
+                  newline="\n") as f:
+            f.write(scrub(text, secrets))
+    man = path("Temp/managed/manifest.md")
+    with open(man, "a", encoding="utf-8") as f:
+        f.write("%s | %s | %s | doctor.py --report bundle\n" % (
+            stamp.date(), stamp.date() + timedelta(days=REPORT_DAYS), rel))
+    return rel
+
+
+def anonymize(text):
+    """Workspace and home paths, login and machine names out of text."""
+    pairs = [(ROOT, "<workspace>"), (os.path.expanduser("~"), "<home>")]
+    for p, tag in list(pairs):
+        pairs += [(p.replace("\\", "/"), tag), (p.replace("/", "\\"), tag)]
+    for p, tag in sorted(pairs, key=lambda x: -len(x[0])):
+        if len(p) > 3:
+            text = re.sub(re.escape(p), tag, text, flags=re.I)
+    for name, tag in ((getpass.getuser(), "<user>"),
+                      (platform.node(), "<machine>")):
+        if name and len(name) > 1:
+            text = re.sub(r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])"
+                          % re.escape(name), tag, text, flags=re.I)
+    return text
+
+
+def issue_body(bundle, problem=""):
+    """The public issue text: the problem in the user's words, the summary
+    table, then not-passing details trimmed from the end to fit ISSUE_CAP.
+    The same text serves gh issue create and the prefilled link."""
+    summary = read(os.path.join(bundle, "summary.md"))
+    secrets = [v for _, v in env_entries() if len(v) >= 4]
+    summary = anonymize(scrub(summary, secrets))
+    problem = anonymize(scrub(problem.strip(), secrets))
+    head, _, rest = summary.partition("\n## Not passing\n")
+    details = re.split(r"(?m)^(?=### )", rest.split("\n## In this bundle",
+                                                    1)[0])
+    details = [d for d in details if d.startswith("### ")]
+    top = ("## What happened\n\n%s\n\n" % problem if problem else "")
+    note = ("\n(Trimmed to fit: %d more not-passing detail(s) stay in the "
+            "reporter's local bundle.)\n")
+    keep = len(details)
+    while True:
+        body = top + head.rstrip() + "\n"
+        if details:
+            body += "\n## Not passing\n\n" + "".join(details[:keep]).rstrip() \
+                + "\n" + (note % (len(details) - keep)
+                          if keep < len(details) else "")
+        if len(body) <= ISSUE_CAP or keep == 0:
+            break
+        keep -= 1
+    if len(body) > ISSUE_CAP and top:
+        over = len(body) - ISSUE_CAP + 20
+        top = "## What happened\n\n%s ...(trimmed)\n\n" % problem[:max(
+            0, len(problem) - over)]
+        body = top + head.rstrip() + "\n" + (
+            note % len(details) if details else "")
+    return body
+
+
 # ------------------------------------------------------------------ main
 
 def log_run(code, summary):
@@ -464,7 +811,24 @@ def log_run(code, summary):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--no-smoke", action="store_true")
+    ap.add_argument("--report", action="store_true")
+    ap.add_argument("--issue", metavar="BUNDLE")
+    ap.add_argument("--problem", metavar="FILE")
+    ap.add_argument("--out", metavar="FILE")
     args = ap.parse_args()
+    if args.issue:
+        bundle = os.path.join(ROOT, args.issue)
+        if not os.path.isfile(os.path.join(bundle, "summary.md")):
+            print("BROKEN: no summary.md in " + bundle)
+            return 2
+        body = issue_body(bundle, read(args.problem) if args.problem
+                          else "")
+        out = args.out or os.path.join(bundle, "issue.md")
+        os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+        with open(out, "w", encoding="utf-8", newline="\n") as f:
+            f.write(body)
+        print("ISSUE BODY: %s (%d characters)" % (out, len(body)))
+        return 0
     checks = [("tree", check_tree), ("workspace rules", check_workspace_rules),
               ("account tier", check_account_tier),
               ("answers", check_answers), ("version", check_version),
@@ -484,14 +848,19 @@ def main():
         except Exception as e:  # a check that cannot tell is a FAIL
             result(name, "FAIL", "the check could not run: %r" % e,
                    "report this with the doctor's output")
+    shown = []
+
+    def say(line):
+        print(line)
+        shown.append(line)
     for name, status, detail, fix in RESULTS:
-        print("%-4s  %-15s  %s" % (status, name, detail))
+        say("%-4s  %-15s  %s" % (status, name, detail))
         if fix:
-            print("%23s%s" % ("fix: ", fix))
+            say("%23s%s" % ("fix: ", fix))
     if CONFIRM:
-        print("\nConfirm with your AI (no script can read its settings):")
+        say("\nConfirm with your AI (no script can read its settings):")
         for c in CONFIRM:
-            print("- " + c)
+            say("- " + c)
     bad = {s: [n for n, st, _, _ in RESULTS if st == s]
            for s in ("FAIL", "WARN")}
     code = 2 if bad["FAIL"] else 3 if bad["WARN"] else 0
@@ -500,8 +869,11 @@ def main():
     if args.no_smoke:
         summary += " (smoke and dashboard skipped)"
     log_run(code, summary)
-    print("\nDOCTOR: %s" % (summary if code else
-                            "PASS - every check passed" + summary[4:]))
+    say("\nDOCTOR: %s" % (summary if code else
+                          "PASS - every check passed" + summary[4:]))
+    if args.report:
+        rel = write_report("\n".join(shown) + "\n", smoke_out[0])
+        print("REPORT: %s/summary.md" % rel)
     return code
 
 

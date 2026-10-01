@@ -7,7 +7,8 @@ installer question). Installs A, then asserts: preview (by default or
 --dry-run) writes nothing; an
 unanswered new question is reported and blocks --apply; an unmodified tree
 upgrades with zero sidecars (replace, add, retire, placed rules kept,
-VERSION bumped, report, day-log line, commits before and after); a rerun
+VERSION bumped, report, day-log line, commits before and after, start and
+finish lines appended to the install journal); a rerun
 has nothing to do; a downgrade is refused; a file the adopter modified is
 never overwritten and gets a sidecar. The real kit is never written.
 
@@ -20,6 +21,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -29,6 +31,7 @@ KIT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, KIT)
 import install  # noqa: E402
 from install_selftest import answers, check, commits, rmtree, FAIL  # noqa
+from workspace_common import JOURNAL  # noqa: E402
 
 MOD = "Maintenance/README.md"       # changed in B; the adopter edits it
 MOD2 = "Memory/README.md"           # changed in B; never edited
@@ -128,6 +131,7 @@ def main():
     ap.add_argument("--tmp")
     tmp = tempfile.mkdtemp(prefix="fieldbook-upgrade-test-",
                            dir=ap.parse_args().tmp)
+    os.environ["FIELDBOOK_HOME"] = os.path.join(tmp, "home")
     ka, kb, va, vb = make_kits(tmp)
     up_a, up_b = os.path.join(ka, "upgrade.py"), os.path.join(kb, "upgrade.py")
     kbw = os.path.join(kb, "workspace")
@@ -160,8 +164,19 @@ def main():
           "nothing", rc == 0 and "PREVIEW" in out and tree(ws) == snap
           and head(ws) == h0, out)
 
+    jp = fp(ws, JOURNAL)
+    before = read(jp) or ""
     rc, out = py(up_b, "--workspace", ws, "--apply")
     log = commits(ws)
+    added = (read(jp) or "")[len(before):]
+    check("apply clean: install journal appended, start and finish",
+          (read(jp) or "").startswith(before) and "| install.py | finish |"
+          in before and re.search(r"\| upgrade\.py \| start \| python "
+                                  r"upgrade\.py .* \| %s -> %s" % (
+                                      re.escape(va), re.escape(vb)), added)
+          and re.search(r"\| upgrade\.py \| finish \| .* \| upgraded "
+                        r"%s -> %s" % (re.escape(va), re.escape(vb)), added),
+          added)
     agents = read(os.path.join(ws, "AGENTS.md")) or ""
     check("apply clean: exit 0, zero sidecars", rc == 0 and "DONE" in out
           and not sidecars(ws), out + str(sidecars(ws)))

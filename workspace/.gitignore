@@ -4,6 +4,7 @@ __pycache__/
 Memory/index/
 Maintenance/*_log.txt
 Scheduled/runs.log
+Setup/install-journal.txt
 # Secrets never enter a repository
 .env
 *.env

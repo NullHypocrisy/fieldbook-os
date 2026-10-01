@@ -27,6 +27,11 @@ on the workspace's history:
 Completed phases are recorded in Setup/install-state.json and skipped on
 rerun. A rerun with every phase done changes nothing and says so.
 
+Journal: every run but a dry one appends to the install journal (the
+workspace's Maintenance/README.md owns its name, place and line format):
+start, one line per phase, finish, and any failure. Lines the installing
+AI wrote to the home-folder journal before this ran are moved in first.
+
 Never overwrite: where a file already exists with other content, the kit's
 version is written beside it as NAME.fieldbook-new and listed in
 Setup/install-report.md; the adopter and their AI merge it. A file the
@@ -79,7 +84,8 @@ KIT = os.path.dirname(os.path.abspath(__file__))
 KIT_WS = os.path.join(KIT, "workspace")
 sys.path.insert(0, KIT_WS)
 from workspace_common import (BOARD_THEMES, MANIFEST, MARK_BEGIN,  # noqa
-                              MARK_END, PROJECT_TEMPLATE, git, git_identity,
+                              MARK_END, PROJECT_TEMPLATE, adopt_home_journal,
+                              git, git_identity, journal, machine_zone,
                               manifest_text, project_files, project_slugs,
                               project_tenant)
 
@@ -153,21 +159,6 @@ def kit_files(skip_example=False):
 
 
 # ---------------------------------------------------------------- checks
-
-def machine_zone():
-    """The machine's time zone name as its OS shows it, or None when it
-    cannot be read. Read only: nothing here ever changes it."""
-    if platform.system() == "Windows":
-        try:
-            r = subprocess.run(["tzutil", "/g"], capture_output=True,
-                               text=True, timeout=30)
-        except (OSError, subprocess.SubprocessError):
-            return None
-        zone = r.stdout.strip()
-        return zone if r.returncode == 0 and zone else None
-    m = re.search(r"zoneinfo/(.+)$", os.path.realpath("/etc/localtime"))
-    return m.group(1) if m else None
-
 
 def check_prereqs():
     py_ok = sys.version_info >= (3, 10)
@@ -349,8 +340,9 @@ def agents_with_block(template, block):
 # ---------------------------------------------------------- the installer
 
 class Installer:
-    def __init__(self, ans, dry, register, zone=None):
+    def __init__(self, ans, dry, register, zone=None, cmdline="install.py"):
         self.ans = ans
+        self.cmdline = cmdline
         self.ws = os.path.abspath(ans["workspace"])
         self.dry = dry
         self.register = register
@@ -687,29 +679,60 @@ class Installer:
     def phase_stamp(self):
         self.put("VERSION", read_kit("VERSION"))
 
+    # -- journal (format: Maintenance/README.md); a dry run writes none
+    def journal(self, step, result):
+        if not self.dry:
+            journal(self.ws, "install.py", step, self.cmdline, result)
+
+    def adopt_journal(self):
+        if self.dry:
+            return
+        moved = adopt_home_journal(self.ws)
+        if moved:
+            self.journal("journal", "moved %d line(s) in from the home "
+                         "folder" % moved)
+
     # -- driver
     def run(self, stop_after=None):
+        self.adopt_journal()
         st = self.load_state()
         done = st.get("phases_done", [])
         if all(p in done for p in PHASES):
             print("NOTHING TO DO: every install phase is already done in "
                   + self.ws)
+            self.journal("finish", "nothing to do")
             return 0
         st["kit_version"] = read_kit("VERSION").splitlines()[0].strip()
+        self.journal("start", "kit %s; phases done before: %s" % (
+            st["kit_version"], ", ".join(done) or "none"))
         for n, name in enumerate(PHASES, 1):
+            step = "phase %d/%d %s" % (n, len(PHASES), name)
             if name in done:
                 print("skip phase %d %s (already done)" % (n, name))
+                self.journal(step, "skipped (already done)")
                 continue
-            print("== phase %d/%d %s" % (n, len(PHASES), name))
-            getattr(self, "phase_" + name)()
-            self.flush_report(name)
-            done.append(name)
-            st["phases_done"] = done
-            self.save_state(st)
-            self.commit(n, name)
+            print("== " + step)
+            try:
+                getattr(self, "phase_" + name)()
+                if name == "workspace":
+                    self.adopt_journal()
+                self.flush_report(name)
+                done.append(name)
+                st["phases_done"] = done
+                self.save_state(st)
+                self.commit(n, name)
+            except Broken as e:
+                self.journal(step, "BROKEN: %s" % e)
+                raise
+            except Exception as e:
+                self.journal(step, "CRASHED: %r" % e)
+                raise
+            self.journal(step, "done%s" % (
+                ", %d held so far" % len(self.held) if self.held else ""))
             if stop_after == name:
                 print("STOPPED after phase %s, as asked; rerun to resume"
                       % name)
+                self.journal("finish", "stopped after %s, as asked" % name)
                 return 3 if self.held else 0
         for h in self.held:
             print("HELD " + h)
@@ -719,8 +742,11 @@ class Installer:
         if self.held:
             print("DONE with %d item(s) to act on; see "
                   "Setup/install-report.md" % len(self.held))
+            self.journal("finish", "done, %d item(s) held (exit 3)"
+                         % len(self.held))
             return 3
         print("DONE: installation complete in " + self.ws)
+        self.journal("finish", "done (exit 0)")
         return 0
 
 
@@ -734,6 +760,9 @@ def main(argv=None):
     ap.add_argument("--stop-after", choices=PHASES)
     ap.add_argument("--no-register", action="store_true")
     a = ap.parse_args(argv)
+    cmdline = "python install.py " + " ".join(
+        sys.argv[1:] if argv is None else argv)
+    ws = None
     try:
         pre = check_prereqs()
         if a.check:
@@ -767,11 +796,14 @@ def main(argv=None):
                 ans = json.load(f)
             validate(ans)
         drop_retired(ans)
+        ws = ans["workspace"]
         rc = Installer(ans, a.dry_run, not a.no_register,
-                       pre["timezone"]["zone"]).run(a.stop_after)
+                       pre["timezone"]["zone"], cmdline).run(a.stop_after)
         return max(rc, code) if rc in (0, 3) else rc
     except Broken as e:
         print("BROKEN: %s" % e)
+        if not a.dry_run and ws is None:
+            journal(None, "install.py", "start", cmdline, "BROKEN: %s" % e)
         return 2
 
 

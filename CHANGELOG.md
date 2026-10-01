@@ -3,6 +3,15 @@
 What changed in each version, newest first. One entry per version, short
 on purpose; the commit history has the detail.
 
+## 0.9.5 (2026-09-30)
+
+- Installs keep a journal: one line per step, started by the installing AI
+  in your home folder and moved into Setup/install-journal.txt by the
+  installer, which (like upgrade.py) adds its own steps.
+- doctor.py --report writes a diagnostic bundle with a one-page summary
+  marking every item PASS, WARN, FAIL or UNKNOWN. The feedback procedure
+  files its summary as the bug report; the bundle stays on your computer.
+
 ## 0.9.4 (2026-09-30)
 
 - Fixes from the first clean-machine install test. A fresh install no

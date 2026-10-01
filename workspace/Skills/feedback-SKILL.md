@@ -12,41 +12,36 @@ triggers:
 
 The kit's repository is `https://github.com/NullHypocrisy/fieldbook-os`.
 A report there is public. Nothing leaves this machine until it has passed
-the sanitizer and the user has read the final text and said yes.
+the sanitizer and the user has read the final text and said yes. The
+diagnostic bundle itself never leaves; only the issue text built from its
+summary does. A chat export never goes into an issue.
 
 ## 1. Gather
 
-From the workspace root, collect:
+From the workspace root:
 
-- **Kit version:** line 1 of `VERSION`.
-- **OS and Python:** `python -c "import platform; print(platform.platform(), platform.python_version())"`.
-- **Health:** `python Maintenance/doctor.py`. Keep its full output; if the
-  problem is in the smoke test, `python Maintenance/smoke_test.py` too.
-- **The problem**, in the user's words: what they did, what happened, what
-  they expected, and whether it happens every time.
+    python Maintenance/doctor.py --report
+
+It takes about a minute and ends with `REPORT: <bundle>/summary.md`; that
+folder under `Temp/managed/` is the evidence (`Maintenance/README.md`
+says what is in it). Then ask the user for **the problem** in their own
+words: what they did, what happened, what they expected, and whether it
+happens every time. Write it to `Temp/managed/feedback-problem.md`, with a
+one-week line in `Temp/managed/manifest.md`.
 
 ## 2. Draft
 
-Write the report to `Temp/managed/feedback/report.md`, and add one line to
-`Temp/managed/manifest.md` giving it a one-week expiry. Shape:
+    python Maintenance/doctor.py --issue <bundle> --problem Temp/managed/feedback-problem.md --out Temp/managed/feedback/report.md
 
-    ## What happened
-    ## What was expected
-    ## Steps to reproduce
-    ## Environment
-    Kit version, OS, Python.
-    ## Doctor output
-    (fenced block)
-
-Then make it anonymous. Replace, everywhere in the report:
-
-- the workspace's full path with `<workspace>`;
-- the home folder's full path with `<home>`;
-- the user's login name, real name and any machine name with `<user>` or
-  `<machine>`.
-
-Leave out file contents from the workspace (memory, specs, logs) unless the
-bug is in that exact text, and then only the lines needed.
+Add a one-week manifest line for the report. The draft holds the problem,
+the bundle's summary table and its not-passing details, trimmed from the
+end to 6,000 characters so both filing routes take the same text. The
+workspace and home paths, login name and machine name are already
+replaced with `<workspace>`, `<home>`, `<user>` and `<machine>`. Read it
+and replace anything else that identifies the user (their real name, a
+project name they would rather keep private) the same way. Add nothing
+from the bundle's other files unless the bug is in that exact text, and
+then only the lines needed.
 
 ## 3. Sanitize
 
@@ -79,13 +74,12 @@ Give the user the issue link `gh` prints.
 
     python -c "import sys, urllib.parse as u; b = open(sys.argv[2], encoding='utf-8').read(); print('https://github.com/NullHypocrisy/fieldbook-os/issues/new?' + u.urlencode({'title': sys.argv[1], 'body': b}))" "TITLE" Temp/managed/feedback/report.md
 
-If the link runs past about 6,000 characters, cut the doctor output in the
-body to its WARN and FAIL lines and rebuild it; the sanitizer passes again
-before the link is shown. Give the user the link: opening it and pressing
-Submit (signed in to GitHub) files the report. The link carries the same
-sanitized text, so nothing new is exposed.
+Give the user the link: opening it and pressing Submit (signed in to
+GitHub) files the report. It carries the same sanitized text, so nothing
+new is exposed.
 
 ## 5. Record
 
 Note the issue link, or that the user submitted by hand, in today's day
-log. The draft and terms file expire from `Temp/managed/` on their own.
+log. The draft, problem, terms file and bundle expire from
+`Temp/managed/` on their own.

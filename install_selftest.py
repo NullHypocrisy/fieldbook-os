@@ -9,7 +9,8 @@ Windows line endings into an empty folder); resume after a stop redoes no
 phase; the close-commit helper commits then exits clean; the machine's
 time zone, never an answer's; project names typed as free text; tier
 placement per slot size; scheduler wiring (hand-run and Windows, never
-registered here).
+registered here); the install journal (home-folder lines moved in, a line
+per phase) and the doctor's diagnostic report on the fresh install.
 
 Usage:  python install_selftest.py [--tmp DIR]
 Exit codes: 0 all passed; 1 crashed; 3 a check failed.
@@ -20,6 +21,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -28,6 +30,7 @@ import tempfile
 KIT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, KIT)
 import install  # noqa: E402
+from workspace_common import HOME_JOURNAL, JOURNAL  # noqa: E402
 
 FAIL = []
 
@@ -85,6 +88,40 @@ def read(p):
         return ""
 
 
+def report_checks(ws):
+    """The full doctor --report (smoke included) on the fresh install."""
+    fake = "install-" + "fake-value-" + "51c0de"
+    env = os.path.join(ws, ".env")
+    with open(env, "w", encoding="utf-8") as f:
+        f.write("TEST_KEY=%s\n" % fake)
+    rc, out = py(os.path.join(ws, "Maintenance", "doctor.py"), "--report",
+                 cwd=ws)
+    m = re.search(r"^REPORT: (.+)/summary\.md$", out, re.M)
+    bundle = os.path.join(ws, *m.group(1).split("/")) if m else ws + "-none"
+    summary = read(os.path.join(bundle, "summary.md"))
+    items = ("tree", "workspace rules", "account tier", "answers", "version",
+             "scheduled", "backup", "git", "smoke", "dashboard", "journal",
+             "installer state", "time zone", "leftover sidecars",
+             "byte-order marks", "git history", "python", "git version",
+             "AI tool", "kit version")
+    missing = [i for i in items if not re.search(
+        r"^\| %s \| (PASS|WARN|FAIL|UNKNOWN) \|" % re.escape(i), summary,
+        re.M)]
+    check("report on a fresh install: every item in the summary, smoke "
+          "output kept, every job listed as hand-run", not missing and
+          "| smoke | PASS |" in summary and "| installer state | PASS |"
+          in summary and summary.count("| run by hand, as chosen at "
+                                       "setup |") >= 6 and
+          "ALL CHECKS PASSED" in read(os.path.join(bundle, "smoke.txt")),
+          (missing, out[-600:]))
+    leaked = [f for f in os.listdir(bundle) if fake in read(
+        os.path.join(bundle, f))] if os.path.isdir(bundle) else ["no bundle"]
+    rc, sout = py(os.path.join(KIT, "sanitize.py"), bundle)
+    check("report on a fresh install: no .env value, sanitize.py clean",
+          not leaked and rc == 0, (leaked, sout))
+    os.remove(env)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tmp")
@@ -93,6 +130,10 @@ def main():
     inst = os.path.join(KIT, "install.py")
     n = len(install.PHASES)
     zone = install.machine_zone()
+    # A throwaway home-folder journal, never the user's.
+    home = os.path.join(tmp, "home")
+    os.makedirs(home)
+    os.environ["FIELDBOOK_HOME"] = home
 
     # prerequisites
     rc, out = py(inst, "--check")
@@ -117,11 +158,24 @@ def main():
     check("answers: invalid set is refused as broken (exit 2)",
           rc == 2 and "BROKEN" in out, out)
 
-    # full install
+    # full install, after the AI's own journal lines
+    hj = os.path.join(home, HOME_JOURNAL)
+    ai_lines = ("2026-01-01 09:00 | ai | check file access | write and read "
+                "test | ok\nthe AI's unformatted note\n")
+    with open(hj, "w", encoding="utf-8") as f:
+        f.write(ai_lines)
     ws = os.path.join(tmp, "full")
     ans_full = answers(tmp, "full", ws)
     rc, out = py(inst, "--answers", ans_full)
     check("install: exits 0 and completes", rc == 0 and "DONE" in out, out)
+    jr = read(os.path.join(ws, *JOURNAL.split("/")))
+    check("journal: home-folder lines moved in first, home copy deleted, a "
+          "line for every phase and the finish",
+          jr.startswith(ai_lines) and not os.path.exists(hj) and all(
+              "| install.py | phase %d/%d %s | python install.py --answers "
+              "%s | done" % (i, n, p, ans_full) in jr
+              for i, p in enumerate(install.PHASES, 1))
+          and "| install.py | finish |" in jr, jr)
     log = commits(ws)
     check("install: one commit per phase", len(log) == n and all(
         any(m.endswith("phase %d/%d %s" % (i, n, p)) for m in log)
@@ -216,6 +270,7 @@ def main():
     check("close-commit: second unchanged run exits clean",
           rc == 0 and "NOTHING TO COMMIT" in out and
           len(commits(ws)) == n + 1, out)
+    report_checks(ws)
 
     # planted collision
     ws = os.path.join(tmp, "collide")
